@@ -1,0 +1,42 @@
+{
+  "domain": "bad.example",
+  "tls": {
+    "valid": true,
+    "expires_at": "2027-01-01T00:00:00+00:00",
+    "expired": false
+  },
+  "dns": {
+    "resolves": true,
+    "ip": "5.6.7.8"
+  },
+  "robots_sitemap": {
+    "robots_txt": false,
+    "sitemap_xml": false
+  },
+  "legal_pages": {
+    "impressum": {
+      "reachable": false,
+      "path": null
+    },
+    "datenschutz": {
+      "reachable": false,
+      "path": null
+    }
+  },
+  "cms": {
+    "detected": [
+      "WordPress"
+    ],
+    "known_vulnerable_version": true
+  },
+  "dead_external_links": [
+    {
+      "url": "https://tote-seite-1.example",
+      "status": 404
+    },
+    {
+      "url": "https://tote-seite-2.example",
+      "status": 500
+    }
+  ]
+}

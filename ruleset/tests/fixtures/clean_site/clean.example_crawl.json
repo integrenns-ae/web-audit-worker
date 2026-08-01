@@ -1,0 +1,36 @@
+{
+  "url": "https://clean.example",
+  "domain": "clean.example",
+  "crawled_at": "2026-07-27T10:00:00Z",
+  "html": "<html lang=\"de\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Musterfirma – Leistungen und Referenzen</title><meta name=\"description\" content=\"Musterfirma bietet professionelle Leistungen mit langjähriger Erfahrung und geprüften Referenzen für Unternehmen.\"><link rel=\"canonical\" href=\"https://clean.example/\"><meta property=\"og:title\" content=\"Musterfirma – Leistungen\"><meta property=\"og:description\" content=\"Professionelle Leistungen mit geprüften Referenzen.\"><script type=\"application/ld+json\">{\"@type\":\"LocalBusiness\"}</script></head><body><h1>Musterfirma</h1><img src=\"a.jpg\" alt=\"Beschreibung A\"><a href=\"/impressum\">Impressum</a><a href=\"/datenschutz\">Datenschutz</a><p>Referenzen: unsere Projekte der letzten Jahre.</p><footer>© 2026 Clean Example</footer></body></html>",
+  "main_status": 200,
+  "main_headers": {},
+  "requests": [
+    {
+      "url": "https://clean.example/style.css",
+      "resource_type": "stylesheet",
+      "method": "GET"
+    }
+  ],
+  "timing": {
+    "dom_content_loaded_ms": 400,
+    "load_event_ms": 600,
+    "first_contentful_paint_ms": 900,
+    "transfer_size_bytes": 250000
+  },
+  "screenshot_path": "runs/clean.example/screenshot.png",
+  "legal_subpages": {
+    "impressum": {
+      "reachable": true,
+      "path": "/impressum",
+      "word_count": 120,
+      "text_content": "Impressum. Vertreten durch: Max Mustermann, Geschäftsführer. Angaben gemäß § 5 DDG."
+    },
+    "datenschutz": {
+      "reachable": true,
+      "path": "/datenschutz",
+      "word_count": 300,
+      "text_content": "Datenschutzerklärung nach aktueller Rechtslage."
+    }
+  }
+}

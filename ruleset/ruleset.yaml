@@ -1,0 +1,383 @@
+# ruleset.yaml
+#
+# Versioniertes Bewertungs-Regelwerk. Diese Datei ist die einzige Quelle für
+# Gewichte und Abzüge — score.py enthält nur die Prüf-LOGIK (wie wird geprüft),
+# diese Datei enthält die Prüf-GEWICHTUNG (wie viele Punkte kostet es).
+#
+# Wichtig für Nachhaltigkeit: wenn sich Gewichte künftig ändern, hier ändern
+# und "version" hochzählen — alte Audit-Ergebnisse bleiben dadurch nachvollziehbar
+# einer bestimmten Regelwerk-Version zugeordnet (siehe run-manifest.ruleset_version).
+
+version: "2026-07-27.13"
+# Änderungen ggü. .12:
+#  - Neue informative Kennzahl "page_count" (kein Abzug): schätzt die Zahl
+#    einzelner Seiten des Auftritts aus der Sitemap (vollständigste Quelle, löst
+#    Sitemap-Index-Dateien auf) bzw. hilfsweise aus den internen Startseiten-
+#    Links. Wird im Bericht als "Umfang des Auftritts" ausgewiesen.
+#    Logik: pipeline/probe_infra.py::estimate_page_count.
+# Änderungen ggü. .11 (gehärtet an elektro-kempf.de):
+#  - audit.py: Schema-Fallback + Fehlerseiten-Schutz. Antwortet die Startseite
+#    nicht sauber (Timeout/None oder 4xx/5xx), wird automatisch das andere Schema
+#    (http<->https) versucht. So wird eine kaputte HTTPS-Seite (503), die per http
+#    funktioniert, korrekt über http auditiert. Liefern BEIDE Schemata einen
+#    Fehler, wird bewusst KEIN Score erzeugt (statt eine leere Fehlerseite zu
+#    bewerten - das ergab vorher z.B. bei Kempf einen sinnlosen Score von 45).
+# Änderungen ggü. .10:
+#  - Non-Profit-Erkennung (Vereine, Kirchengemeinden, Stiftungen, Kommunen) via
+#    pipeline/score.py::is_non_profit. Für erkannte Non-Profits wird die Regel
+#    inhalt.no_references_or_portfolio als "nicht anwendbar" geführt (neuer
+#    conditional_rules-Mechanismus, regelweise statt kategorieweise). Generalisiert
+#    auf Kirchengemeinden. Erkennung bewusst konservativ (Identität aus Titel/
+#    Impressum + stark religiöse Begriffe), damit Unternehmen, die nur ihre
+#    Verbands-Mitgliedschaft nennen, NICHT als Non-Profit gelten.
+# Änderungen ggü. .8 (gehärtet an reconex.de):
+#  - Platzhalter-Erkennung (inhalt.template_placeholder_in_production) ist jetzt
+#    slider-/lazy-load-bewusst: dummy.png/placeholder.png gelten NICHT mehr als
+#    unfertiger Platzhalter, wenn die Seite ein Lazy-Load-/Slider-Framework nutzt
+#    (Slider Revolution u.a. liefern dummy.png als Stand-in mit). Behebt
+#    False-Positive. Logik: pipeline/probe_network.py::_real_image_placeholder.
+#  - inhalt.dead_external_link wertet einen Timeout/Verbindungsfehler (kein
+#    HTTP-Status) nicht mehr als toten Link - transiente Langsamkeit ist kein
+#    Beleg (wunderweb.de antwortete beim Audit nur langsam). Solche Links werden
+#    als "nicht prüfbar" ausgewiesen. Logik: pipeline/score.py::_is_unverifiable_link.
+# Änderungen ggü. .7:
+#  - recht.impressum_no_authorized_rep löst nur noch bei KAPITALGESELLSCHAFTEN
+#    (GmbH/UG/AG/KGaA/eG) aus - nur sie haben ein gesetzliches Vertretungsorgan
+#    getrennt von den Eigentümern. Personengesellschaften (GbR/OHG/KG/PartG) und
+#    Einzelformen (e.K.) gelten jetzt wie natürliche Personen. Behebt latente
+#    False-Positives bei Gemeinschaftspraxis-GbR (nur Namen genannt) und e.K.,
+#    die die frühere, label-wort-abhängige Logik noch auslöste.
+# Änderungen ggü. .6 (gehärtet an wunderweb.de):
+#  - recht.impressum_no_authorized_rep erkennt jetzt auch Personengesellschaften
+#    (GbR/OHG: "Gesellschafter") und §18-MStV/§55-RStV-Verantwortliche
+#    ("Verantwortlich für den Inhalt") als benannte Vertretung -> behebt
+#    False-Positive bei einer GbR mit klar genannten Gesellschaftern.
+#  - Klassifikator wertet explizite lokale Positionierung (Impressum-Ort im
+#    Titel/H1, z.B. "... in Hüttenberg") als Lokal-Signal. Verhindert, dass eine
+#    lokal auftretende Agentur fälschlich als ortsunabhängig gilt und die
+#    Kategorie lokale_sichtbarkeit übersprungen wird.
+# Änderungen ggü. .5:
+#  - inhalt.no_references_or_portfolio erkennt jetzt auch englische bzw. anders
+#    benannte Referenzteile ("Testimonials", "What clients say", "Kunden sagen"
+#    u.a.). Die alte, deutsch-only Stichwortliste übersah einen vorhandenen
+#    Testimonial-Abschnitt und löste einen False-Positive aus (-5, der in allen
+#    vorigen Läufen zu Unrecht zählte).
+# Änderungen ggü. .4:
+#  - inhalt.dead_external_link zählt Social-/Portal-Links (LinkedIn, X, Xing,
+#    Instagram, Facebook, TikTok, Medium), die nur den Bot mit Anti-Bot-Status
+#    (403/429/503/999) oder Timeout abweisen, NICHT mehr als tot - das war ein
+#    False-Positive (echtes LinkedIn-Profil wurde als defekt gewertet). Ein
+#    echtes 404 auf solchen Domains bleibt zählbar. Die betroffenen Links werden
+#    stattdessen transparent als "nicht automatisch prüfbar" im Bericht gelistet.
+#    Logik: pipeline/score.py::_is_unverifiable_social_link.
+# Änderungen ggü. .3:
+#  - Neue, universell geltende Kategorie "auffindbarkeit_seo" (allgemeines
+#    On-Page-/Technik-SEO) - gilt für ALLE Geschäftstypen, unabhängig vom Ort.
+#    Schließt die Lücke, die durch das bedingte Ausblenden der lokalen
+#    Sichtbarkeit für ortsunabhängige Anbieter entstand.
+#  - Regel seo.no_sitemap_or_robots von lokale_sichtbarkeit nach
+#    auffindbarkeit_seo verschoben (robots/sitemap ist allgemeines SEO).
+#  - Gewichte neu verteilt (Summe bleibt 100): technik 25->23, lokale 20->12
+#    (bedingt + verliert die robots/sitemap-Regel), inhalt 20->15; die frei
+#    gewordenen 15 Punkte gehen an auffindbarkeit_seo.
+#  - Bewusst NICHT dupliziert: HTTPS (Technik), Viewport/Alt-Texte (Mobil)
+#    bleiben in ihren Kategorien, um Doppelbestrafung zu vermeiden.
+
+# Kategorien, deren Relevanz vom Geschäftstyp abhängt. score.py liest diesen
+# Block und entscheidet anhand der Klassifikation, ob die Kategorie zählt.
+conditional_categories:
+  lokale_sichtbarkeit:
+    applies_to: local_service_business
+    suppress_when: non_local
+    note: "Lokale Auffindbarkeit (Google-Profil, LocalBusiness-Schema, Ortsbezug) ist nur für ortsgebundene Dienstleister ein echtes Qualitätskriterium."
+
+# Einzelne Regeln, deren Relevanz vom Organisationstyp abhängt. score.py liest
+# diesen Block; suppress_when: non_profit greift, wenn is_non_profit(...) True ist.
+conditional_rules:
+  inhalt.no_references_or_portfolio:
+    suppress_when: non_profit
+    note: "Referenzen/Portfolio/Kundenstimmen sind ein Geschäfts-Konzept; für Vereine, Kirchengemeinden und andere Non-Profits inhaltlich nicht anwendbar."
+
+floor: 15  # Gesamtscore fällt nie unter diesen Wert, auch bei vielen Abzügen
+
+category_weights:
+  technik_performance: 23
+  mobil_zugaenglichkeit: 15
+  recht: 20
+  auffindbarkeit_seo: 15
+  lokale_sichtbarkeit: 12
+  inhalt_aktualitaet: 15
+
+rules:
+
+  # ---------------- Technik & Performance (25) ----------------
+  - id: technik.no_https
+    category: technik_performance
+    automated: true
+    deduction: 25
+    message_internal: "Keine gültige HTTPS-Verbindung"
+    message_customer: "Die Seite ist nicht (durchgängig) über eine sichere Verbindung erreichbar."
+
+  - id: technik.cert_expired
+    category: technik_performance
+    automated: true
+    deduction: 20
+    message_internal: "TLS-Zertifikat abgelaufen"
+    message_customer: "Das Sicherheitszertifikat der Seite ist abgelaufen."
+
+  - id: technik.fcp_over_4s
+    category: technik_performance
+    automated: true
+    deduction: 10
+    message_internal: "First Contentful Paint über 4 Sekunden"
+    message_customer: "Die Seite braucht auf einem normalen Gerät spürbar lange, bis überhaupt etwas sichtbar wird."
+
+  - id: technik.fcp_2_5_to_4s
+    category: technik_performance
+    automated: true
+    deduction: 5
+    message_internal: "First Contentful Paint zwischen 2,5 und 4 Sekunden"
+    message_customer: "Der erste sichtbare Inhalt lädt langsamer als heute üblich."
+
+  - id: technik.page_weight_over_5mb
+    category: technik_performance
+    automated: true
+    deduction: 6
+    message_internal: "Seitengewicht über 5 MB"
+    message_customer: "Die Seite lädt ungewöhnlich viele Daten, was auf dem Handy spürbar ist."
+
+  - id: technik.large_uncompressed_images
+    category: technik_performance
+    automated: true
+    deduction: 4
+    message_internal: "Mind. ein Bild über 1 MB unkomprimiert eingebunden"
+    message_customer: "Einzelne Bilder sind unnötig groß und verlangsamen den Seitenaufbau."
+
+  - id: technik.outdated_cms_known_vulnerable
+    category: technik_performance
+    automated: true
+    deduction: 10
+    message_internal: "CMS-Fingerprint zeigt veraltete, bekannt verwundbare Version"
+    message_customer: "Die verwendete Softwareversion im Hintergrund ist veraltet und bekannt angreifbar."
+
+  # ---------------- Mobil & Zugänglichkeit (15) ----------------
+  - id: mobil.no_responsive_viewport
+    category: mobil_zugaenglichkeit
+    automated: true
+    deduction: 15
+    message_internal: "Kein responsive Viewport-Meta-Tag gefunden"
+    message_customer: "Die Seite ist nicht für Mobilgeräte optimiert."
+
+  - id: mobil.viewport_blocks_zoom
+    category: mobil_zugaenglichkeit
+    automated: true
+    deduction: 6
+    message_internal: "user-scalable=no oder maximum-scale=1 im Viewport gesetzt"
+    message_customer: "Nutzer können auf dem Handy nicht in die Seite hineinzoomen."
+
+  - id: mobil.alt_text_missing_majority
+    category: mobil_zugaenglichkeit
+    automated: true
+    deduction: 4
+    message_internal: "Mehr als 50% der Bilder ohne Alt-Text"
+    message_customer: "Die meisten Bilder haben keine Beschreibung für Screenreader oder Suchmaschinen."
+
+  - id: mobil.tap_targets_too_small
+    category: mobil_zugaenglichkeit
+    automated: false  # v2: braucht Layout-Messung der gerenderten Elemente
+    deduction: 4
+    message_internal: "Tap-Targets vermutlich unter 44px (manuell zu prüfen)"
+    message_customer: "Bedienelemente könnten auf dem Handy zu klein zum Antippen sein."
+
+  - id: mobil.low_contrast_text
+    category: mobil_zugaenglichkeit
+    automated: false  # v2: braucht Farbkontrast-Berechnung auf gerenderten Farben
+    deduction: 3
+    message_internal: "Kontrastverhältnis vermutlich unter 4.5:1 (manuell zu prüfen)"
+    message_customer: "Text könnte auf manchen Bildschirmen schwer lesbar sein."
+
+  # ---------------- Recht (20) ----------------
+  - id: recht.impressum_missing
+    category: recht
+    automated: true
+    deduction: 20
+    message_internal: "Kein Impressum auffindbar"
+    message_customer: "Ein Impressum ist auf der Seite nicht auffindbar."
+
+  - id: recht.impressum_no_authorized_rep
+    category: recht
+    automated: true
+    deduction: 5
+    message_internal: "Impressum ohne erkennbaren Vertretungsberechtigten"
+    message_customer: "Im Impressum fehlt eine verantwortliche Person."
+
+  - id: recht.outdated_legal_reference
+    category: recht
+    automated: true
+    deduction: 4
+    message_internal: "Impressum verweist auf RStV/TMG statt MStV/DDG"
+    message_customer: "Das Impressum verweist auf inzwischen abgelöste Gesetzestexte."
+
+  - id: recht.datenschutz_missing
+    category: recht
+    automated: true
+    deduction: 15
+    message_internal: "Keine Datenschutzerklärung auffindbar"
+    message_customer: "Eine Datenschutzerklärung ist auf der Seite nicht auffindbar."
+
+  - id: recht.third_party_before_consent
+    category: recht
+    automated: true
+    deduction_per_unit: 8
+    max_deduction: 12
+    message_internal: "Drittanbieter-Request vor jeder Consent-Interaktion beobachtet"
+    message_customer: "Es werden externe Dienste geladen, bevor eine Einwilligung eingeholt wird."
+
+  - id: recht.form_without_privacy_notice
+    category: recht
+    automated: false  # v2: braucht Formularerkennung + Textnähe-Analyse
+    deduction: 4
+    message_internal: "Kontaktformular ohne erkennbaren Datenschutzhinweis (manuell zu prüfen)"
+    message_customer: "Beim Kontaktformular fehlt ein Hinweis zur Datenverarbeitung."
+
+  # ---------------- Auffindbarkeit / SEO (15) ----------------
+  # Allgemeines On-Page-/Technik-SEO, gilt für ALLE Geschäftstypen. Bewusst OHNE
+  # Regeln, die schon andere Kategorien abdecken (HTTPS -> Technik, Viewport/
+  # Alt-Texte -> Mobil), um Doppelbestrafung zu vermeiden.
+  - id: seo.missing_or_default_title
+    category: auffindbarkeit_seo
+    automated: true
+    deduction: 5
+    message_internal: "Kein Seitentitel oder noch ein Vorlagen-Standardtitel (z.B. 'Lovable', 'Vite App', 'index')"
+    message_customer: "Der Seitentitel fehlt oder ist noch der Vorgabe-Titel der Vorlage — für Google zentral."
+
+  - id: seo.missing_meta_description
+    category: auffindbarkeit_seo
+    automated: true
+    deduction: 3
+    message_internal: "Keine (oder zu kurze) Meta-Description"
+    message_customer: "Es fehlt eine Kurzbeschreibung, die Google als Textvorschau in den Ergebnissen nutzt."
+
+  - id: seo.noindex_detected
+    category: auffindbarkeit_seo
+    automated: true
+    deduction: 6
+    message_internal: "Seite auf noindex gestellt (Meta-Robots) — wird aus dem Index ausgeschlossen"
+    message_customer: "Die Seite ist technisch von der Google-Suche ausgeschlossen (noindex)."
+
+  - id: seo.multiple_or_missing_h1
+    category: auffindbarkeit_seo
+    automated: true
+    deduction: 2
+    message_internal: "Keine oder mehr als eine H1-Überschrift auf der Startseite"
+    message_customer: "Die Seite hat keine eindeutige Hauptüberschrift (H1)."
+
+  - id: seo.missing_canonical
+    category: auffindbarkeit_seo
+    automated: true
+    deduction: 2
+    message_internal: "Kein Canonical-Tag gesetzt"
+    message_customer: "Es fehlt ein Canonical-Verweis, der Suchmaschinen die maßgebliche URL nennt."
+
+  - id: seo.missing_lang_attribute
+    category: auffindbarkeit_seo
+    automated: true
+    deduction: 2
+    message_internal: "Kein lang-Attribut am <html>-Element"
+    message_customer: "Die Seitensprache ist technisch nicht ausgezeichnet (lang-Attribut fehlt)."
+
+  - id: seo.missing_open_graph
+    category: auffindbarkeit_seo
+    automated: true
+    deduction: 2
+    message_internal: "Keine Open-Graph-Tags (og:title/og:description) für Vorschau beim Teilen"
+    message_customer: "Beim Teilen in sozialen Netzwerken/Messengern fehlt eine ordentliche Vorschau."
+
+  - id: seo.no_sitemap_or_robots
+    category: auffindbarkeit_seo
+    automated: true
+    deduction: 3
+    message_internal: "Weder robots.txt noch sitemap.xml erreichbar"
+    message_customer: "Es gibt keine Sitemap, die Suchmaschinen das Auffinden aller Seiten erleichtert."
+
+  # ---------------- Lokale Sichtbarkeit (12) ----------------
+  - id: seo.no_localbusiness_schema
+    category: lokale_sichtbarkeit
+    automated: true
+    deduction: 5
+    message_internal: "Kein LocalBusiness-/Organization-Schema (JSON-LD) gefunden"
+    message_customer: "Suchmaschinen fehlt eine strukturierte Kennzeichnung der Organisation (Schema.org)."
+
+  - id: seo.no_location_in_title_h1
+    category: lokale_sichtbarkeit
+    automated: false  # v2: braucht einen erwarteten Standort als Eingabeparameter pro Kunde
+    deduction: 5
+    message_internal: "Kein Ortsbezug in Title oder H1 der Startseite (manuell zu prüfen)"
+    message_customer: "Die Startseite nennt in Titel/Überschrift keinen Ort — schwächt die lokale Auffindbarkeit."
+
+  - id: seo.nap_inconsistent
+    category: lokale_sichtbarkeit
+    automated: false  # v2: braucht Abgleich mit Google-Unternehmensprofil (Places API)
+    deduction: 5
+    message_internal: "Name/Adresse/Telefon vermutlich inkonsistent zum Google-Profil (manuell zu prüfen)"
+    message_customer: "Adressangaben könnten uneinheitlich zu anderen Verzeichnissen sein."
+
+  - id: seo.no_google_business_profile
+    category: lokale_sichtbarkeit
+    automated: false  # v2: braucht Places API Abgleich
+    deduction: 8
+    message_internal: "Kein verknüpftes Google-Unternehmensprofil gefunden (manuell zu prüfen)"
+    message_customer: "Es ist kein Google-Unternehmensprofil verknüpft."
+
+  # ---------------- Inhalt & Aktualität (15) ----------------
+  - id: inhalt.construction_notice_visible
+    category: inhalt_aktualitaet
+    automated: true
+    deduction: 8
+    message_internal: "Baustellenhinweis/Under-Construction-Text sichtbar im Haupttext"
+    message_customer: "Auf der Seite steht ein sichtbarer Hinweis auf unfertige Inhalte."
+
+  - id: inhalt.copyright_year_old
+    category: inhalt_aktualitaet
+    automated: true
+    deduction: 5
+    message_internal: "Copyright-Jahr im Footer älter als 2 Jahre"
+    message_customer: "Die Jahresangabe im Footer ist veraltet."
+
+  - id: inhalt.template_placeholder_in_production
+    category: inhalt_aktualitaet
+    automated: true
+    deduction: 6
+    message_internal: "Platzhalter-Inhalt gefunden (z.B. dummy.png, Lorem Ipsum, Theme-Credits)"
+    message_customer: "Es sind noch Platzhalter-Inhalte aus der Erstellung sichtbar."
+
+  - id: inhalt.template_placeholder_link
+    category: inhalt_aktualitaet
+    automated: true
+    deduction_per_unit: 4   # härter als ein generisch toter Link (2): signalisiert
+    max_deduction: 8        # eine nie fertig eingerichtete Vorlage, nicht nur Linkfäule
+    message_internal: "Link zeigt noch auf Template-Platzhalter (z.B. johndoe, example.com, yourdomain)"
+    message_customer: "Verweise auf der Seite zeigen noch auf Platzhalter-Adressen aus der Vorlage."
+
+  - id: inhalt.dead_external_link
+    category: inhalt_aktualitaet
+    automated: true
+    deduction_per_unit: 2
+    max_deduction: 8
+    message_internal: "Externer Link mit Fehlerstatus (4xx/5xx)"
+    message_customer: "Einzelne Verweise auf der Seite funktionieren nicht mehr."
+
+  - id: inhalt.thin_content_page
+    category: inhalt_aktualitaet
+    automated: false  # v2: braucht Mehrseiten-Crawl der ganzen Domain, v1 crawlt nur die Startseite
+    deduction_per_unit: 3
+    max_deduction: 9
+    message_internal: "Unterseite mit unter 150 Wörtern Fließtext (manuell zu prüfen)"
+    message_customer: "Manche Unterseiten haben kaum eigenen Inhalt."
+
+  - id: inhalt.no_references_or_portfolio
+    category: inhalt_aktualitaet
+    automated: true
+    deduction: 5
+    message_internal: "Keine Referenzen/Portfolio/Kundenstimmen auffindbar"
+    message_customer: "Es fehlen Referenzen oder Beispiele bisheriger Arbeit."

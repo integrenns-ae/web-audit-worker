@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtuelle Umgebung
+.venv/
+venv/
+
+# Audit-Läufe (Rohdaten/Berichte werden nicht versioniert)
+runs/
+
+# lokale Konfiguration / Secrets (nie ins Repo!)
+.env
+*.local
+
+# OS / Editor
+.DS_Store
+.idea/
+.vscode/

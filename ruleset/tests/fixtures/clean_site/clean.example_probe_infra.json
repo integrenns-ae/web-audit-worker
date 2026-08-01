@@ -1,0 +1,33 @@
+{
+  "domain": "clean.example",
+  "tls": {
+    "valid": true,
+    "expires_at": "2027-01-01T00:00:00+00:00",
+    "expired": false
+  },
+  "dns": {
+    "resolves": true,
+    "ip": "1.2.3.4"
+  },
+  "robots_sitemap": {
+    "robots_txt": true,
+    "sitemap_xml": true
+  },
+  "legal_pages": {
+    "impressum": {
+      "reachable": true,
+      "path": "/impressum"
+    },
+    "datenschutz": {
+      "reachable": true,
+      "path": "/datenschutz"
+    }
+  },
+  "cms": {
+    "detected": [
+      "unbekannt / vermutlich Individualentwicklung"
+    ],
+    "known_vulnerable_version": false
+  },
+  "dead_external_links": []
+}

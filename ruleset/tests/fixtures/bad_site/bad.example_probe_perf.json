@@ -1,0 +1,10 @@
+{
+  "domain": "bad.example",
+  "first_contentful_paint_ms": 4800,
+  "dom_content_loaded_ms": 4200,
+  "transfer_size_bytes": 6500000,
+  "total_requests": 40,
+  "image_requests": 12,
+  "script_requests": 8,
+  "large_image_over_1mb_detected": null
+}

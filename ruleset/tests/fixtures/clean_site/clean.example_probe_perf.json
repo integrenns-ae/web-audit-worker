@@ -1,0 +1,10 @@
+{
+  "domain": "clean.example",
+  "first_contentful_paint_ms": 900,
+  "dom_content_loaded_ms": 400,
+  "transfer_size_bytes": 250000,
+  "total_requests": 5,
+  "image_requests": 1,
+  "script_requests": 1,
+  "large_image_over_1mb_detected": null
+}

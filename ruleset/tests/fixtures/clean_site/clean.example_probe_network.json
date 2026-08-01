@@ -1,0 +1,10 @@
+{
+  "domain": "clean.example",
+  "trackers_before_consent": [],
+  "viewport": {"present": true, "content": "width=device-width, initial-scale=1", "blocks_zoom": false},
+  "legal_pages_linked": {"impressum_linked": true, "datenschutz_linked": true},
+  "placeholders_found": [],
+  "construction_notice": false,
+  "copyright": {"found": true, "year": 2026, "older_than_2_years": false},
+  "alt_texts": {"total_images": 1, "missing_alt": 0, "majority_missing": false}
+}

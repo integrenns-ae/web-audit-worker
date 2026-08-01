@@ -1,0 +1,41 @@
+{
+  "url": "https://bad.example",
+  "domain": "bad.example",
+  "crawled_at": "2026-07-27T10:00:00Z",
+  "html": "<html><head><meta name=\"viewport\" content=\"width=device-width, user-scalable=no\"></head><body><h1>ACHTUNG: Seite befindet sich im Aufbau</h1><img src=\"dummy.png\"><img src=\"b.jpg\"><p>wenig text</p><footer>© 2019 Bad Example</footer></body></html>",
+  "main_status": 200,
+  "main_headers": {},
+  "requests": [
+    {
+      "url": "https://www.google-analytics.com/analytics.js",
+      "resource_type": "script",
+      "method": "GET"
+    },
+    {
+      "url": "https://maps.googleapis.com/maps/api/js",
+      "resource_type": "script",
+      "method": "GET"
+    }
+  ],
+  "timing": {
+    "dom_content_loaded_ms": 4200,
+    "load_event_ms": 5000,
+    "first_contentful_paint_ms": 4800,
+    "transfer_size_bytes": 6500000
+  },
+  "screenshot_path": "runs/bad.example/screenshot.png",
+  "legal_subpages": {
+    "impressum": {
+      "reachable": false,
+      "path": null,
+      "word_count": 0,
+      "text_content": ""
+    },
+    "datenschutz": {
+      "reachable": false,
+      "path": null,
+      "word_count": 0,
+      "text_content": ""
+    }
+  }
+}

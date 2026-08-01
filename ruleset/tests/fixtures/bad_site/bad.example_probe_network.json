@@ -1,0 +1,13 @@
+{
+  "domain": "bad.example",
+  "trackers_before_consent": [
+    {"label": "Google Analytics", "url": "https://www.google-analytics.com/analytics.js"},
+    {"label": "Google Maps", "url": "https://maps.googleapis.com/maps/api/js"}
+  ],
+  "viewport": {"present": true, "content": "width=device-width, user-scalable=no", "blocks_zoom": true},
+  "legal_pages_linked": {"impressum_linked": false, "datenschutz_linked": false},
+  "placeholders_found": ["dummy\\.(png|jpg|jpeg)"],
+  "construction_notice": true,
+  "copyright": {"found": true, "year": 2019, "older_than_2_years": true},
+  "alt_texts": {"total_images": 2, "missing_alt": 2, "majority_missing": true}
+}
