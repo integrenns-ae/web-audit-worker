@@ -19,12 +19,23 @@ from __future__ import annotations
 import asyncio
 import glob
 import json
+import logging
 import os
 import re
 from urllib.parse import urlparse
 
+log = logging.getLogger("audit")
+
 RULESET_DIR = os.environ.get("RULESET_DIR", "/opt/ruleset")
 AUDIT_TIMEOUT_S = int(os.environ.get("AUDIT_TIMEOUT_S", "120"))
+
+# Crawl-/Netzwerk-Marker: nicht aufloesbare Domain, Timeout, TLS, Verbindung.
+# Das ist KEIN interner Fehler -> nicht_auditierbar (Tippfehler, Seite offline).
+_NET_MARKERS = (
+    "ERR_NAME_NOT_RESOLVED", "ERR_CONNECTION", "ERR_ABORTED", "ERR_TIMED_OUT",
+    "ERR_ADDRESS_UNREACHABLE", "ERR_SSL", "ERR_CERT", "ERR_HTTP2",
+    "net::", "TimeoutError", "Page.goto",
+)
 
 
 class NotAuditableError(Exception):
@@ -79,8 +90,16 @@ async def run_audit(url: str) -> dict:
     # Jüngstes score_result.json für diese Domain einlesen.
     pattern = os.path.join(RULESET_DIR, "runs", domain, "*", f"{domain}_score_result.json")
     files = sorted(glob.glob(pattern), key=os.path.getmtime)
-    if proc.returncode != 0 or not files:
-        raise RuntimeError(f"Audit fehlgeschlagen (rc={proc.returncode})")
+    if proc.returncode == 0 and files:
+        with open(files[-1], encoding="utf-8") as fh:
+            return json.load(fh)
 
-    with open(files[-1], encoding="utf-8") as fh:
-        return json.load(fh)
+    # Kein Ergebnis: Crawl-/Netzwerkfehler (nicht auflösbar, Timeout, TLS …)
+    # -> nicht_auditierbar, NICHT als interner Fehler.
+    if any(m in text for m in _NET_MARKERS):
+        raise NotAuditableError("Seite nicht erreichbar")
+
+    # Echter, unerwarteter Fehler -> loggen (für Diagnose) und failed.
+    log.warning("Audit rc=%s ohne Ergebnis für %s. Ausgabe (Ende):\n%s",
+                proc.returncode, domain, text[-1200:])
+    raise RuntimeError(f"Audit fehlgeschlagen (rc={proc.returncode})")
