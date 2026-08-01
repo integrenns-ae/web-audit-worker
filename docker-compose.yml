@@ -1,0 +1,19 @@
+services:
+  audit-worker:
+    build: .
+    container_name: audit-worker
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8003:8003"   # nur localhost; nginx/Proxy davor
+    volumes:
+      - audit-data:/data        # SQLite (persistent)
+      - ./:/app:ro              # Code read-only -> rsync + restart genuegt
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  audit-data:
