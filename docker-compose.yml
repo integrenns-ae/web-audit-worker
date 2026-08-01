@@ -7,8 +7,9 @@ services:
     ports:
       - "127.0.0.1:8003:8003"   # nur localhost; nginx/Proxy davor
     volumes:
-      - audit-data:/data        # SQLite (persistent)
-      - ./:/app:ro              # Code read-only -> rsync + restart genuegt
+      - audit-data:/data                 # SQLite (persistent)
+      - audit-runs:/opt/ruleset/runs     # Audit-Laeufe (persistent, fuer compare.py)
+      - ./:/app:ro                       # Code read-only -> rsync + restart genuegt
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
       interval: 30s
@@ -17,3 +18,4 @@ services:
 
 volumes:
   audit-data:
+  audit-runs:

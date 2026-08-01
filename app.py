@@ -15,7 +15,10 @@ import hmac
 import logging
 import os
 import secrets
+import shutil
+import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -36,12 +39,42 @@ MAX_URL = 300
 
 SEM = asyncio.Semaphore(MAX_CONCURRENT)
 
+RUNS_DIR = Path(os.environ.get("RULESET_DIR", "/opt/ruleset")) / "runs"
+RUNS_MAX_AGE_S = int(os.environ.get("AUDIT_RUNS_MAX_AGE_DAYS", "360")) * 86400
+
+
+def prune_old_runs() -> None:
+    """Löscht Audit-Läufe älter als AUDIT_RUNS_MAX_AGE_DAYS (Standard 360 Tage)."""
+    if not RUNS_DIR.exists():
+        return
+    cutoff = time.time() - RUNS_MAX_AGE_S
+    for domain_dir in RUNS_DIR.iterdir():
+        if not domain_dir.is_dir():
+            continue
+        for run_dir in domain_dir.iterdir():
+            try:
+                if run_dir.is_dir() and run_dir.stat().st_mtime < cutoff:
+                    shutil.rmtree(run_dir, ignore_errors=True)
+            except OSError:
+                pass
+
+
+async def _prune_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(prune_old_runs)
+        except Exception:  # noqa: BLE001
+            log.exception("runs-cleanup fehlgeschlagen")
+        await asyncio.sleep(86400)   # täglich
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     store.mark_stale_pending_failed(older_than_s=900)   # Crash-Recovery
     store.cleanup_req_log(older_than_s=86400)
+    prune_task = asyncio.create_task(_prune_loop())
     yield
+    prune_task.cancel()
 
 
 app = FastAPI(title="audit-worker", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
