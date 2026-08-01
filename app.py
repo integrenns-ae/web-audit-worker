@@ -59,7 +59,11 @@ def _check_secret(provided: str | None) -> None:
 
 
 def _client_ip(request: Request) -> str:
-    return request.headers.get("x-real-ip") or (request.client.host if request.client else "?")
+    # Echte Besucher-IP kommt vom Strato-Proxy als X-Client-IP (server-seitig
+    # gesetzt, nur mit gültigem Shared-Secret erreichbar -> vertrauenswürdig).
+    return (request.headers.get("x-client-ip")
+            or request.headers.get("x-real-ip")
+            or (request.client.host if request.client else "?"))
 
 
 async def _run_job(job_id: str, url: str) -> None:
