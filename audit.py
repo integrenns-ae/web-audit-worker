@@ -83,6 +83,11 @@ async def run_audit(url: str) -> dict:
 
     text = out.decode("utf-8", "replace")
 
+    # Zielseite sperrt Prüf-Bots per robots.txt aus. Kein Fehler, sondern ein
+    # respektierter Wunsch -> eigener Grund, den das Frontend erkennt.
+    if "ROBOTS DISALLOW" in text:
+        raise NotAuditableError("robots_disallow")
+
     # Regelwerk signalisiert Unerreichbarkeit explizit und schreibt kein Ergebnis.
     if "NICHT AUDITIERBAR" in text:
         raise NotAuditableError("https+http lieferten Fehler")

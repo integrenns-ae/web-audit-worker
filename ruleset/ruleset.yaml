@@ -8,7 +8,20 @@
 # und "version" hochzählen — alte Audit-Ergebnisse bleiben dadurch nachvollziehbar
 # einer bestimmten Regelwerk-Version zugeordnet (siehe run-manifest.ruleset_version).
 
-version: "2026-07-27.13"
+version: "2026-07-27.14"
+# Änderungen ggü. .13:
+#  - Höflichkeits-Gate vor dem Crawl: sperrt die robots.txt der Zielseite unseren
+#    Bot für die GESAMTE Site aus ("Disallow: /" für IntegrennsAuditBot oder "*"),
+#    wird kein einziger Request gegen die Seite gesetzt und kein Score erzeugt.
+#    audit.py meldet dann "ROBOTS DISALLOW"; der Worker macht daraus den Grund
+#    "robots_disallow" (Status nicht_auditierbar), das Frontend zeigt einen
+#    eigenen Hinweis samt Freigabe-Anleitung auf integrenns.de/bot.
+#    Bewusst eng: Teilpfad-Sperren (z.B. "Disallow: /admin") stoppen nichts,
+#    fehlende/kaputte/nicht erreichbare robots.txt gilt als erlaubt.
+#    Das Gate steht vor dem Anlegen des Lauf-Ordners - eine abgelehnte Domain
+#    hinterlaesst keinen Eintrag unter runs/.
+#    Logik: pipeline/robots.py::is_crawl_allowed.
+#  - KEINE Änderung an Gewichten oder Abzügen - Scores bleiben mit .13 vergleichbar.
 # Änderungen ggü. .12:
 #  - Neue informative Kennzahl "page_count" (kein Abzug): schätzt die Zahl
 #    einzelner Seiten des Auftritts aus der Sitemap (vollständigste Quelle, löst

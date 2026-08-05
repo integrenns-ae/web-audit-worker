@@ -24,6 +24,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from pipeline.crawl import crawl
+from pipeline.robots import is_crawl_allowed
 from pipeline.probe_infra import probe_infra
 from pipeline.probe_perf import probe_perf
 from pipeline.probe_network import probe_network
@@ -34,6 +35,17 @@ from pipeline.report import run_report
 async def run_audit(url: str) -> Path:
     if not url.startswith("http"):
         url = "https://" + url
+
+    # Hoeflichkeits-Gate: sperrt die robots.txt unseren Bot komplett aus, wird
+    # KEINE Seite abgerufen. Steht bewusst ganz vorn - vor dem Crawl UND vor dem
+    # Anlegen des Lauf-Ordners, damit eine abgelehnte Domain keinerlei Spur
+    # hinterlaesst (wir versprechen "kein einziger Request").
+    allowed, robots_reason = is_crawl_allowed(url)
+    if not allowed:
+        print()
+        print(f"ROBOTS DISALLOW: {robots_reason} - es wird keine Seite abgerufen "
+              f"und bewusst KEIN Score erzeugt.")
+        return None
 
     domain = urlparse(url).netloc.lower().removeprefix("www.")
     timestamp = time.strftime("%Y%m%d-%H%M%S")
