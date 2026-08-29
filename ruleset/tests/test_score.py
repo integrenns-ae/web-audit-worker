@@ -356,6 +356,29 @@ def test_english_testimonials_section_satisfies_references():
     assert check(None, None, None, {"html": "<h1>Willkommen</h1>"}) is True
 
 
+def test_kundenabschnitt_zaehlt_als_referenz():
+    """Fix (pixelstein.de): Eine Kundenliste unter der Ueberschrift "Unsere Kunden"
+    ist ein Referenznachweis. Die Liste kannte nur "unsere projekte" und loeste
+    deshalb einen False-Positive aus (-5 trotz vorhandenem Abschnitt)."""
+    check = CHECKS["inhalt.no_references_or_portfolio"]
+    for html in [
+        '<section><h2>Unsere Kunden</h2><ul><li>Firma A</li><li>Firma B</li></ul></section>',
+        '<h2>Our Clients</h2>',
+        '<h2>Kunden &amp; Partner</h2>',
+        '<h3>Diese Unternehmen vertrauen uns</h3>',
+    ]:
+        assert check(None, None, None, {"html": html}) is False, html
+
+
+def test_referenzpruefung_bleibt_bei_leerer_seite_streng():
+    """Gegenprobe zur Erweiterung: ohne jeden Referenzbezug feuert die Regel
+    weiterhin - die neuen Stichwoerter duerfen sie nicht entschaerfen."""
+    check = CHECKS["inhalt.no_references_or_portfolio"]
+    html = ("<h1>Willkommen</h1><p>Wir bieten Beratung und Betreuung. "
+            "Rufen Sie uns an oder schreiben Sie eine E-Mail.</p>")
+    assert check(None, None, None, {"html": html}) is True
+
+
 def test_gbr_with_named_partners_not_flagged():
     """Härtung (wunderweb.de): eine GbR, die ihre Gesellschafter und den
     Inhaltsverantwortlichen nennt, hat eine erkennbare Vertretung -> kein Abzug."""

@@ -18,6 +18,7 @@ Probe-JSON-Dateien. Das ist der Teil, der sich in dieser Sandbox testen laesst.
 
 import json
 import re
+from html import unescape as html_unescape
 from pathlib import Path
 
 import yaml
@@ -383,7 +384,9 @@ def _check_template_placeholder_in_production(infra, perf, network, crawl_meta):
 
 
 def _check_no_references_or_portfolio(infra, perf, network, crawl_meta):
-    html_lower = crawl_meta.get("html", "").lower()
+    # Entities aufloesen: im Quelltext steht "Kunden &amp; Partner", nicht
+    # "Kunden & Partner" - ohne unescape griffe das Stichwort nie.
+    html_lower = html_unescape(crawl_meta.get("html", "")).lower()
     # Deutsch UND Englisch, plus die gängige Testimonial-/Review-Vokabel. Die
     # frühere Liste war deutsch-only und übersah "Testimonials"/"What clients say"
     # -> False-Positive auf Seiten mit englischem/anders benanntem Referenzteil.
@@ -393,6 +396,11 @@ def _check_no_references_or_portfolio(infra, perf, network, crawl_meta):
         "referenz", "portfolio", "kundenstimme", "unsere projekte", "case stud",
         "testimonial", "clients say", "what clients", "kunden sagen", "was kunden",
         "erfahrungsbericht", "bewertungen von", "das sagen",
+        # Kundenlisten heissen oft schlicht "Unsere Kunden" - die Liste kannte
+        # bisher nur "unsere projekte" und uebersah genau diesen Fall
+        # (pixelstein.de, 2026-08: -5 zu Unrecht trotz Kundenabschnitt).
+        "unsere kunden", "our clients", "our customers", "kunden & partner",
+        "kunden und partner", "vertrauen uns", "kundenprojekte", "auswahl unserer",
     ]
     return not any(k in html_lower for k in keywords)
 

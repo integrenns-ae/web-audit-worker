@@ -8,7 +8,19 @@
 # und "version" hochzählen — alte Audit-Ergebnisse bleiben dadurch nachvollziehbar
 # einer bestimmten Regelwerk-Version zugeordnet (siehe run-manifest.ruleset_version).
 
-version: "2026-07-27.14"
+version: "2026-07-27.15"
+# Änderungen ggü. .14:
+#  - inhalt.no_references_or_portfolio: Stichwortliste um Kundenlisten erweitert
+#    ("Unsere Kunden", "Our Clients", "Kunden & Partner", "vertrauen uns" u.a.).
+#    Die Liste kannte nur "unsere projekte" und übersah damit die häufigste
+#    Überschrift für einen Referenzabschnitt überhaupt — bei pixelstein.de
+#    wurden dadurch 5 Punkte zu Unrecht abgezogen, obwohl ein Kundenabschnitt
+#    vorhanden war. Bewusste Abwägung: Bei einer heuristischen Regel ist ein
+#    übersehener Mangel (False Negative) weniger schädlich als ein falscher
+#    Vorwurf gegenüber einem Interessenten (False Positive).
+#    Logik: pipeline/score.py::_check_no_references_or_portfolio.
+#  - KEINE Änderung an Gewichten — Scores bleiben mit .14 vergleichbar, außer
+#    dass zu Unrecht abgezogene 5 Punkte auf betroffenen Seiten zurückkommen.
 # Änderungen ggü. .13:
 #  - Höflichkeits-Gate vor dem Crawl: sperrt die robots.txt der Zielseite unseren
 #    Bot für die GESAMTE Site aus ("Disallow: /" für IntegrennsAuditBot oder "*"),
