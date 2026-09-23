@@ -1,0 +1,116 @@
+name: Deploy auf den VPS
+
+# Push auf main deployt den Worker inklusive des vendorten Regelwerks.
+# Damit muss niemand mehr eine SSH-Sitzung öffnen.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'ruleset/runs/**'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-audit-worker
+  cancel-in-progress: false      # laufenden Deploy NICHT abbrechen – sonst
+                                 # bleibt der Container halb gebaut zurück
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Regelwerk-Tests
+        # Läuft ohne Netzwerk und ohne Playwright – fängt Regelfehler ab,
+        # bevor sie auf den Server kommen.
+        run: |
+          python3 -m pip install --quiet pytest requests pyyaml
+          cd ruleset && python3 -m pytest tests/ -q
+
+      - name: Vendoring prüfen
+        # Das Regelwerk liegt doppelt (Quelle: web-audit-ruleset). Hier wird
+        # nur sichergestellt, dass die Kopie in sich stimmig ist.
+        run: |
+          test -f ruleset/ruleset.yaml || { echo "ruleset/ fehlt"; exit 1; }
+          VERSION=$(grep -m1 '^version:' ruleset/ruleset.yaml | cut -d'"' -f2)
+          echo "Regelwerk-Version: $VERSION"
+          [ -n "$VERSION" ] || { echo "Keine Version in ruleset.yaml"; exit 1; }
+          echo "RULESET_VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: SSH vorbereiten
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Backup auf dem VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes "$VPS_USER@$VPS_HOST" \
+            'cd /opt && sudo tar czf /opt/audit-worker-backup-$(date +%Y%m%d-%H%M%S).tgz --exclude=audit-worker/.git audit-worker && ls -1t /opt/audit-worker-backup-*.tgz | head -1'
+
+      - name: Code spiegeln
+        # OHNE .env (bleibt auf dem Server) und OHNE runs/ (die gespeicherten
+        # Crawls sind die Grundlage für Regressionstests – nie löschen).
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          rsync -az --delete \
+            --exclude='.env' --exclude='.git' --exclude='.github' \
+            --exclude='.venv' --exclude='__pycache__' --exclude='.pytest_cache' \
+            --exclude='ruleset/runs' \
+            -e "ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes" \
+            ./ "$VPS_USER@$VPS_HOST:/opt/audit-worker/"
+
+      - name: Container neu bauen
+        # --build ist Pflicht: das Dockerfile kopiert ruleset/ beim Bauen nach
+        # /opt/ruleset. Ein blosses restart liesse die ALTE Regelversion laufen.
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes "$VPS_USER@$VPS_HOST" \
+            'cd /opt/audit-worker && docker compose up -d --build 2>&1 | tail -5'
+
+      - name: Prüfen
+        # Beweist, dass wirklich die neue Regelversion läuft und der Dienst
+        # antwortet – nicht nur, dass der Container gestartet ist.
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          sleep 15
+          ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes "$VPS_USER@$VPS_HOST" bash -s <<EOSSH
+            set -e
+            echo "Container: \$(docker ps --filter name=audit-worker --format '{{.Status}}')"
+            LIVE=\$(docker exec audit-worker grep -m1 '^version:' /opt/ruleset/ruleset.yaml | cut -d'"' -f2)
+            echo "Regelwerk im Container: \$LIVE"
+            [ "\$LIVE" = "${RULESET_VERSION}" ] || { echo "FEHLER: erwartet ${RULESET_VERSION}"; exit 1; }
+            docker exec -w /opt/ruleset audit-worker python -m pytest tests/ -q 2>&1 | tail -2
+            cd /opt/audit-worker
+            export \$(grep -E '^AUDIT_SHARED_SECRET=' .env)
+            CODE=\$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8003/audit \
+              -H 'Content-Type: application/json' -H "X-Shared-Secret: \$AUDIT_SHARED_SECRET" \
+              -d '{"url":"cbgg.de"}')
+            echo "Enqueue-Antwort: \$CODE"
+            case "\$CODE" in 200|202) ;; *) echo "FEHLER: Worker antwortet nicht"; exit 1 ;; esac
+            echo "Deploy verifiziert."
+          EOSSH
+
+      - name: Live-Kette prüfen
+        # Der Weg, den ein echter Besucher nimmt – über Strato-Proxy und nginx.
+        run: |
+          ANTWORT=$(curl -s -X POST https://integrenns.de/api/audit \
+            -H 'Content-Type: application/json' -d '{"url":"cbgg.de"}')
+          echo "$ANTWORT"
+          echo "$ANTWORT" | grep -q 'job_id' || { echo "FEHLER: Kette unterbrochen"; exit 1; }
