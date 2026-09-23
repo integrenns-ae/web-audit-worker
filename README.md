@@ -1,5 +1,12 @@
 # web-audit-worker
 
+> **Gesamt-Übergabe:** Dieses Repo ist Teil des Website-Check-Systems von integrenns.de.
+> Die vollständige Dokumentation — Architektur der Kette, Zugänge, Deploy-Prozeduren für alle
+> drei Repos, Gotchas und offene Punkte — steht zentral in
+> [`expert-showcase-site/HANDOFF.md`](https://github.com/integrenns-ae/expert-showcase-site/blob/main/HANDOFF.md).
+> **Vor substanzieller Arbeit dort zuerst lesen.**
+
+
 FastAPI-Worker, der Websites auditiert und einen `score_result` liefert. Gegenpart
 zum `/website-check`-Trichter auf [integrenns.de](https://integrenns.de/website-check).
 
