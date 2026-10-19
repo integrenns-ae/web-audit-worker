@@ -113,6 +113,18 @@ def count_requests(ip: str, within_s: int) -> int:
     return int(row["n"]) if row else 0
 
 
+def cleanup_jobs(older_than_s: int) -> None:
+    """Alte Auftraege samt URL und Ergebnis loeschen.
+
+    Die Datenschutzerklaerung nennt zwoelf Monate; ohne diese Funktion blieben
+    gepruefte Adressen unbegrenzt gespeichert.
+    """
+    cutoff = time.time() - older_than_s
+    _c().execute(
+        "DELETE FROM jobs WHERE COALESCE(finished_at, created_at) < ?", (cutoff,)
+    )
+
+
 def cleanup_req_log(older_than_s: int) -> None:
     _c().execute("DELETE FROM req_log WHERE ts<?", (time.time() - older_than_s,))
     _c().commit()

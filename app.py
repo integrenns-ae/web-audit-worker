@@ -59,19 +59,34 @@ def prune_old_runs() -> None:
                 pass
 
 
+# Loeschfristen - muessen zur Datenschutzerklaerung passen (/datenschutz):
+# IP-Adressen hoechstens 24 Stunden, geprüfte Adressen und Ergebnisse 12 Monate.
+IP_MAX_AGE_S = 86400
+JOBS_MAX_AGE_S = 365 * 86400
+
+
 async def _prune_loop() -> None:
     while True:
         try:
             await asyncio.to_thread(prune_old_runs)
         except Exception:  # noqa: BLE001
             log.exception("runs-cleanup fehlgeschlagen")
+        # Beide Loeschungen gehoeren in den taeglichen Lauf. Vorher liefen sie
+        # nur beim Start - bei wochenlang laufendem Container wurden IP-Adressen
+        # damit faktisch nie geloescht.
+        try:
+            await asyncio.to_thread(store.cleanup_req_log, IP_MAX_AGE_S)
+            await asyncio.to_thread(store.cleanup_jobs, JOBS_MAX_AGE_S)
+        except Exception:  # noqa: BLE001
+            log.exception("datenbank-cleanup fehlgeschlagen")
         await asyncio.sleep(86400)   # täglich
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     store.mark_stale_pending_failed(older_than_s=900)   # Crash-Recovery
-    store.cleanup_req_log(older_than_s=86400)
+    store.cleanup_req_log(older_than_s=IP_MAX_AGE_S)
+    store.cleanup_jobs(older_than_s=JOBS_MAX_AGE_S)
     prune_task = asyncio.create_task(_prune_loop())
     yield
     prune_task.cancel()
