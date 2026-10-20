@@ -176,3 +176,29 @@ def test_eine_einzige_schwaeche_wird_trotzdem_gefunden():
         "auffindbarkeit_seo": 15, "lokale_sichtbarkeit": 12,
         "inhalt_aktualitaet": 15}})
     assert k["schwaechste_kategorie"] == "recht"
+
+
+# --- Seitenzahl -------------------------------------------------------------
+
+def test_seitenzahl_wird_aus_dem_objekt_geholt():
+    """Live aufgefallen: Das Regelwerk liefert page_count als Objekt. Ohne
+    Verflachung standen vier Felder im Modellkontext, wo eines genuegt - und
+    API.md versprach eine Zahl."""
+    k = kompakt.verdichten({"page_count": {
+        "sitemap_urls": 7, "internal_links_home": 8,
+        "estimate": 7, "source": "sitemap"}})
+    assert k["seiten_geschaetzt"] == 7
+
+
+def test_seitenzahl_vertraegt_alle_formen():
+    for eingabe, erwartet in (
+        (11, 11),
+        (None, None),
+        ({}, None),
+        ({"source": "links"}, None),
+        ({"estimate": None}, None),
+        ("sieben", None),
+        (True, None),
+    ):
+        k = kompakt.verdichten({"page_count": eingabe})
+        assert k["seiten_geschaetzt"] == erwartet, f"{eingabe!r} -> {k['seiten_geschaetzt']!r}"

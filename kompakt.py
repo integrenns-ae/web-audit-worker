@@ -86,6 +86,24 @@ def _kuerzen(text: str) -> str:
     return (schnitt or text[:MAX_TEXT]) + "…"
 
 
+def _seitenzahl(page_count) -> int | None:
+    """Das Regelwerk liefert hier ein Objekt, nicht eine Zahl.
+
+    {"sitemap_urls": 7, "internal_links_home": 8, "estimate": 7,
+     "source": "sitemap"} - fuer den Agenten zaehlt nur `estimate`. Ohne diese
+    Verflachung standen vier Felder im Modellkontext, wo eines genuegt.
+    """
+    if isinstance(page_count, bool):
+        return None
+    if isinstance(page_count, int):
+        return page_count
+    if isinstance(page_count, dict):
+        wert = page_count.get("estimate")
+        if isinstance(wert, int) and not isinstance(wert, bool):
+            return wert
+    return None
+
+
 def _schwaechste(kategorien: dict[str, list[int]]) -> str | None:
     """Relativ zum Gewicht, nicht nach absoluten Punkten.
 
@@ -152,7 +170,7 @@ def verdichten(result: dict, *, geprueft_am: float | None = None,
         "schwaechste_kategorie": _schwaechste(kategorien),
         "top_findings": befunde[:MAX_FINDINGS],
         "befunde_gesamt": len(befunde),
-        "seiten_geschaetzt": result.get("page_count"),
+        "seiten_geschaetzt": _seitenzahl(result.get("page_count")),
         "geschaeftstyp": result.get("business_locality"),
         "non_profit": bool(result.get("is_non_profit")),
         "regelwerk": result.get("ruleset_version"),

@@ -129,7 +129,17 @@ Blick.
 Für den Brief liefert die API `absender_kandidat` (Firma, Anschrift, Telefon,
 E-Mail aus dem Impressum). Felder können `null` sein, der Block kann fehlen.
 **Vor dem Druck prüfen** — das ist eine Textextraktion aus handgeschriebener
-Prosa.
+Prosa. Im ersten echten Lauf stimmten Anschrift, Telefon und E-Mail, `firma`
+lieferte aber `"Freelance IT consultant"`: Über der Anschrift stand dort eine
+Berufsbezeichnung statt eines Firmennamens. Der Agent sollte `firma` deshalb
+als Vorschlag behandeln und den Namen, wo möglich, aus der OSM-Quelle
+gegenprüfen.
+
+Fehlt der Block ganz, ist kein Brief möglich. Das passiert bei Impressen ohne
+Anschrift — und in einem seltenen Sonderfall: Hat der Website-Trichter die
+Domain in den letzten 12 Stunden geprüft, erbt der Agent dessen Ergebnis
+(kein zweiter Crawl), und der Trichter erhebt keine Kontaktdaten. Dann
+Kandidaten zurückstellen, nicht raten.
 
 ### Google Drive: bewusst später
 

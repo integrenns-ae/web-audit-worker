@@ -19,7 +19,7 @@ Freigabeliste, Brief- und E-Mail-Kanal, Datenquellen — steht in
 | Mandantenpfad bei jedem Deploy geprüft | 2 | **fertig** |
 | `?format=kompakt`, `?warten=`, Warteschlangen-Grenze, reservierter Slot | 3 | **fertig** |
 | `keep_raw`, `absender_kandidat`, `retention_days` | 4 | **fertig** |
-| Schlüssel für Vilikon | 5 | wartet auf den Credstore-Eintrag |
+| Schlüssel für Vilikon | 5 | **fertig** |
 
 ---
 
@@ -171,6 +171,7 @@ nicht geschätzt. Als Text in einem Modellaufruf ist das Verschwendung.
       "text": "Ein Impressum ist nicht auffindbar. Das ist in Deutschland …" }
   ],
   "seiten_geschaetzt": 7,
+  "befunde_gesamt": 6,
   "geschaeftstyp": "local",
   "non_profit": false,
   "geprueft_am": "2026-10-20T14:03:11Z",
@@ -208,6 +209,11 @@ Impressum gelesen, das der Crawl ohnehin abruft:
   "quelle": "/impressum"
 }
 ```
+
+**Beispiel aus dem ersten echten Lauf** (integrenns.de): Anschrift, Telefon
+und E-Mail waren richtig, `firma` lieferte aber `"Freelance IT consultant"` —
+die Zeile über der Anschrift war dort eine Berufsbezeichnung, kein Firmenname.
+Genau deshalb ist dieser Block ein Vorschlag und keine Zusage.
 
 Gelesen wird der Impressumstext, den der Crawl ohnehin abruft — **es wird
 keine zusätzliche Seite geladen**, die fremde Website wird dafür nicht ein
