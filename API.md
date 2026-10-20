@@ -174,6 +174,7 @@ nicht geschätzt. Als Text in einem Modellaufruf ist das Verschwendung.
   "befunde_gesamt": 6,
   "geschaeftstyp": "local",
   "non_profit": false,
+  "heilberuf": false,
   "geprueft_am": "2026-10-20T14:03:11Z",
   "cached": false
 }
@@ -187,6 +188,11 @@ nicht geschätzt. Als Text in einem Modellaufruf ist das Verschwendung.
   soll keinen erfinden.
 - `top_findings` sind höchstens drei, nach Punktabzug sortiert, Text auf 300
   Zeichen gekürzt, **nur** `message_customer`.
+- `heilberuf` ist `true` bei Arzt-, Zahnarzt-, Therapie- und
+  Heilpraktiker-Praxen. Zwei Dinge folgen daraus: Die Regel „keine Referenzen
+  oder Portfolio" wird dort **nicht** angewendet (sie ist sachlich unpassend
+  und rechtlich heikel, siehe unten), und das Anschreiben darf keine Aussagen
+  über Behandlungserfolge enthalten.
 - `geprueft_am` kommt aus dem Worker (`jobs.finished_at`), nicht aus dem
   Regelwerk — im Score-Ergebnis steht kein Zeitstempel. Bei 12 Stunden
   Cooldown ließe sich frisch sonst nicht von wiederverwendet unterscheiden.

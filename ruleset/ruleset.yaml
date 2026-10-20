@@ -8,7 +8,25 @@
 # und "version" hochzählen — alte Audit-Ergebnisse bleiben dadurch nachvollziehbar
 # einer bestimmten Regelwerk-Version zugeordnet (siehe run-manifest.ruleset_version).
 
-version: "2026-07-27.15"
+version: "2026-07-27.16"
+# Änderungen ggü. .15:
+#  - inhalt.no_references_or_portfolio gilt nicht mehr für HEILBERUFE (Arzt-,
+#    Zahnarzt-, Therapie-, Heilpraktiker-Praxen). Erkennung:
+#    pipeline/score.py::is_heilberuf. Zwei unabhängige Gründe:
+#    (a) Sachlich hat eine Praxis kein "Portfolio bisheriger Arbeiten" — der
+#        Kundensatz war dort derselbe Kategorienfehler wie bei einem Verein.
+#    (b) Patientenäußerungen sind rechtlich heikles Gelände: nach § 11 Abs. 1
+#        Satz 1 Nr. 11 HWG seit der Novelle 2012 nicht pauschal verboten, aber
+#        nur zulässig, solange nicht missbräuchlich/abstoßend/irreführend;
+#        Heilungsversprechen verbietet § 3 HWG; bei plastisch-chirurgischen
+#        Eingriffen ist die Vorher-Nachher-Darstellung ausdrücklich untersagt.
+#        Ein Befund "dir fehlen Referenzen" schob eine Praxis genau in die
+#        Inhaltsform, für die sie einen Anwalt braucht.
+#    Der conditional_rules-Mechanismus nimmt jetzt mehrere Bedingungen als
+#    Liste; eine einzelne bleibt als String zulässig.
+#  - Neues informatives Feld "is_heilberuf" im Ergebnis (kein Abzug).
+#  - KEINE Änderung an Gewichten. Scores ändern sich nur für erkannte
+#    Heilberufe, und dort nur nach oben (5 Punkte, die zu Unrecht fehlten).
 # Änderungen ggü. .14:
 #  - inhalt.no_references_or_portfolio: Stichwortliste um Kundenlisten erweitert
 #    ("Unsere Kunden", "Our Clients", "Kunden & Partner", "vertrauen uns" u.a.).
@@ -120,8 +138,16 @@ conditional_categories:
 # diesen Block; suppress_when: non_profit greift, wenn is_non_profit(...) True ist.
 conditional_rules:
   inhalt.no_references_or_portfolio:
-    suppress_when: non_profit
-    note: "Referenzen/Portfolio/Kundenstimmen sind ein Geschäfts-Konzept; für Vereine, Kirchengemeinden und andere Non-Profits inhaltlich nicht anwendbar."
+    suppress_when: [non_profit, heilberuf]
+    note: >
+      Referenzen/Portfolio/Kundenstimmen sind ein Geschäfts-Konzept. Für
+      Vereine, Kirchengemeinden und andere Non-Profits inhaltlich nicht
+      anwendbar. Für Heilberufe doppelt unpassend: Eine Praxis hat kein
+      Portfolio bisheriger Arbeiten, und Patientenäußerungen sind nach
+      § 11 Abs. 1 Satz 1 Nr. 11 HWG nur eingeschränkt zulässig
+      (nicht missbräuchlich/abstoßend/irreführend), Heilungsversprechen
+      verbietet § 3 HWG, Vorher-Nachher-Bilder bei plastisch-chirurgischen
+      Eingriffen sind untersagt.
 
 floor: 15  # Gesamtscore fällt nie unter diesen Wert, auch bei vielen Abzügen
 

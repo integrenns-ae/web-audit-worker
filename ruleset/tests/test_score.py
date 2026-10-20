@@ -10,6 +10,7 @@ Ausführen:
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -17,7 +18,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pipeline.score import load_ruleset, score, CHECKS, classify_business_locality, is_non_profit
+from pipeline.score import (load_ruleset, score, CHECKS, classify_business_locality,
+                           is_non_profit, is_heilberuf)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -518,3 +520,123 @@ def test_references_rule_active_for_business():
     assert result["is_non_profit"] is False
     assert result["suppressed_rules"] == []
     assert any(f["id"] == "inhalt.no_references_or_portfolio" for f in result["findings"])
+
+
+def test_heilberuf_detection():
+    """Praxen werden erkannt; Unternehmen NICHT - auch nicht, wenn sie das
+    Wort "Praxis" im Namen tragen oder einen Arzt als Kunden erwaehnen."""
+    for titel in ("Zahnarztpraxis Dr. Meier Grünberg",
+                  "Praxis Dr. med. Anna Beispiel",
+                  "Praxis für Physiotherapie Grünberg",
+                  "Hausärztliche Gemeinschaftspraxis Langgöns",
+                  "Heilpraktiker Michael Muster",
+                  "HNO-Praxis Gießen",
+                  "Medizinisches Versorgungszentrum Mittelhessen",
+                  "Logopädie Beispiel"):
+        meta = {"html": f"<title>{titel}</title>",
+                "legal_subpages": {"impressum": {"text_content": ""}}}
+        assert is_heilberuf(meta) is True, f"nicht erkannt: {titel}"
+
+    # Erkennung auch rein ueber das Impressum (Aufsichtsbehoerde/Approbation):
+    nur_impressum = {
+        "html": "<title>Dr. Anna Beispiel</title>",
+        "legal_subpages": {"impressum": {"text_content":
+            "Zuständige Aufsichtsbehörde: Landesärztekammer Hessen. Approbation erteilt 2009."}}}
+    assert is_heilberuf(nur_impressum) is True
+
+
+def test_heilberuf_detection_keine_fehlalarme():
+    """Die Gegenprobe ist hier wichtiger als die Erkennung: Ein falsch
+    erkannter Heilberuf verschenkt 5 Punkte an ein Unternehmen."""
+    for titel, impressum in (
+        ("Praxis für Unternehmensberatung Müller", ""),
+        ("Sanitär Meier GmbH", "Sanitär Meier GmbH, Geschäftsführer Max Meier"),
+        ("Agentur Wohnort Design", ""),                 # "hno" steckt in "Wohnort"
+        ("Technologie Partner AG", ""),
+        ("Apotheken-Zulieferer Beispiel GmbH", ""),
+        ("Steuerberatung Beispiel", ""),
+        ("Bienenzuchtverein Grünberg", ""),
+        ("Fahrschule Beispiel", "Wir beliefern auch Arztpraxen in der Region."),
+    ):
+        meta = {"html": f"<title>{titel}</title>",
+                "legal_subpages": {"impressum": {"text_content": impressum}}}
+        assert is_heilberuf(meta) is False, f"Fehlalarm: {titel}"
+
+
+def test_references_rule_suppressed_for_heilberuf():
+    """Bei einer erkannten Praxis wird no_references_or_portfolio als 'nicht
+    anwendbar' gefuehrt - kein Abzug, aber transparent ausgewiesen."""
+    infra, perf, network, crawl = load_fixture("bad_site", "bad.example")
+    crawl = dict(crawl)
+    crawl["html"] = "<title>Zahnarztpraxis Dr. Meier</title>" + crawl["html"]
+    ruleset = load_ruleset()
+    result = score(infra, perf, network, crawl, ruleset)
+
+    assert result["is_heilberuf"] is True
+    assert result["is_non_profit"] is False
+    assert "inhalt.no_references_or_portfolio" in result["suppressed_rules"]
+    assert not any(f["id"] == "inhalt.no_references_or_portfolio" for f in result["findings"])
+    assert any(r["id"] == "inhalt.no_references_or_portfolio" for r in result["not_applicable"])
+    # Andere Inhalt-Regeln greifen weiter - unterdrueckt wird EINE Regel,
+    # nicht die Kategorie.
+    assert any(f["category"] == "inhalt_aktualitaet" for f in result["findings"])
+
+
+def test_heilberuf_bekommt_die_fuenf_punkte_zurueck():
+    """Der konkrete Effekt: genau 5 Punkte, nicht mehr.
+
+    Gemessen an clean_site mit entfernten Referenz-Stichworten. bad_site taugt
+    dafuer nicht: Dort liegt inhalt_aktualitaet schon auf 0, ein zurueck-
+    gegebener Abzug waere unsichtbar.
+    """
+    infra, perf, network, crawl = load_fixture("clean_site", "clean.example")
+    ruleset = load_ruleset()
+
+    # Stichworte entfernen, damit die Regel ueberhaupt greifen kann.
+    # Gross-/Kleinschreibung egal - "unsere Projekte" stand klein im Fixture.
+    ohne_referenzen = re.sub(r"referenz\w*", "Leistungen", crawl["html"], flags=re.I)
+    ohne_referenzen = re.sub(r"unsere projekte", "was wir machen",
+                             ohne_referenzen, flags=re.I)
+
+    def mit_titel(titel: str) -> dict:
+        variante = dict(crawl)
+        variante["html"] = re.sub(r"<title>.*?</title>", f"<title>{titel}</title>",
+                                  ohne_referenzen, count=1, flags=re.I | re.S)
+        return variante
+
+    r_firma = score(infra, perf, network, mit_titel("Musterfirma GmbH"), ruleset)
+    r_praxis = score(infra, perf, network,
+                     mit_titel("Zahnarztpraxis Dr. Meier"), ruleset)
+
+    # Vorbedingung: Beim Unternehmen MUSS die Regel jetzt feuern, sonst
+    # messen wir nichts.
+    assert any(f["id"] == "inhalt.no_references_or_portfolio" for f in r_firma["findings"])
+    assert r_firma["is_heilberuf"] is False
+    assert r_praxis["is_heilberuf"] is True
+
+    vorher = r_firma["category_scores"]["inhalt_aktualitaet"]
+    nachher = r_praxis["category_scores"]["inhalt_aktualitaet"]
+    assert nachher - vorher == 5, f"{vorher} -> {nachher}"
+    assert r_praxis["overall"] - r_firma["overall"] == 5
+
+
+def test_mehrere_bedingungen_und_einzelne_bleiben_zulaessig():
+    """suppress_when nimmt jetzt eine Liste. Eine einzelne Bedingung muss als
+    String weiter funktionieren, sonst bricht jede aeltere Regel-Konfiguration."""
+    from pipeline.score import score as score_fn
+
+    infra, perf, network, crawl = load_fixture("bad_site", "bad.example")
+    ruleset = load_ruleset()
+
+    # Liste (produktiver Stand)
+    assert ruleset["conditional_rules"]["inhalt.no_references_or_portfolio"][
+        "suppress_when"] == ["non_profit", "heilberuf"]
+
+    # String-Form kuenstlich herstellen und pruefen, dass sie greift
+    einzeln = dict(ruleset)
+    einzeln["conditional_rules"] = {
+        "inhalt.no_references_or_portfolio": {"suppress_when": "heilberuf"}}
+    praxis = dict(crawl)
+    praxis["html"] = "<title>Zahnarztpraxis Dr. Meier</title>" + crawl["html"]
+    ergebnis = score_fn(infra, perf, network, praxis, einzeln)
+    assert "inhalt.no_references_or_portfolio" in ergebnis["suppressed_rules"]

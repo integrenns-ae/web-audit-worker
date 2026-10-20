@@ -202,3 +202,56 @@ def test_seitenzahl_vertraegt_alle_formen():
     ):
         k = kompakt.verdichten({"page_count": eingabe})
         assert k["seiten_geschaetzt"] == erwartet, f"{eingabe!r} -> {k['seiten_geschaetzt']!r}"
+
+
+def test_heilberuf_wird_durchgereicht():
+    """Fuer einen Agenten, der gezielt Aerzte sucht, ist das ein
+    Auswahlsignal - und ein Warnsignal fuers Anschreiben (HWG)."""
+    assert kompakt.verdichten({"is_heilberuf": True})["heilberuf"] is True
+    assert kompakt.verdichten({})["heilberuf"] is False
+
+
+def test_referenzbefund_entfaellt_bei_praxen():
+    """Gegen das echte Regelwerk: Eine Praxis darf den Befund
+    "Es fehlen Referenzen oder Beispiele bisheriger Arbeit" nicht bekommen -
+    er ist sachlich falsch und schiebt sie rechtlich ins HWG-Gelaende."""
+    import re
+    import shutil
+    import sys
+
+    from conftest import REPO
+    sys.path.insert(0, str(REPO / "ruleset"))
+    from pipeline.score import load_ruleset, score
+
+    quelle = REPO / "ruleset/tests/fixtures/clean_site"
+    import tempfile
+    ziel = Path(tempfile.mkdtemp(prefix="praxis-"))
+    for f in quelle.glob("*.json"):
+        shutil.copy(f, ziel)
+
+    import json as _json
+    crawl = _json.loads((ziel / "clean.example_crawl.json").read_text())
+    infra = _json.loads((ziel / "clean.example_probe_infra.json").read_text())
+    perf = _json.loads((ziel / "clean.example_probe_perf.json").read_text())
+    netw = _json.loads((ziel / "clean.example_probe_network.json").read_text())
+
+    # Referenz-Stichworte entfernen, damit die Regel ueberhaupt greifen koennte
+    ohne = re.sub(r"referenz\w*", "Leistungen", crawl["html"], flags=re.I)
+    ohne = re.sub(r"unsere projekte", "was wir machen", ohne, flags=re.I)
+
+    def mit_titel(titel):
+        c = dict(crawl)
+        c["html"] = re.sub(r"<title>.*?</title>", f"<title>{titel}</title>",
+                           ohne, count=1, flags=re.I | re.S)
+        return c
+
+    rs = load_ruleset()
+    firma = kompakt.verdichten(score(infra, perf, netw, mit_titel("Musterfirma GmbH"), rs))
+    praxis = kompakt.verdichten(score(infra, perf, netw,
+                                      mit_titel("Zahnarztpraxis Dr. Meier"), rs))
+
+    assert firma["heilberuf"] is False
+    assert praxis["heilberuf"] is True
+    assert any("Referenzen" in b["text"] for b in firma["top_findings"])
+    assert not any("Referenzen" in b["text"] for b in praxis["top_findings"])
+    assert praxis["overall"] - firma["overall"] == 5

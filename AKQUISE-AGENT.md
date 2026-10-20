@@ -108,6 +108,23 @@ Kombination aus:
 `grund: "robots_disallow"` → Kandidat **endgültig** verwerfen und nicht
 erneut versuchen. Die Seite hat Prüf-Bots ausgesperrt; das wird respektiert.
 
+### Heilberufe brauchen einen anderen Ton
+
+Ist `heilberuf: true` (Arzt-, Zahnarzt-, Therapie-, Heilpraktiker-Praxis),
+gelten zwei Zusatzregeln fürs Anschreiben:
+
+- **Nicht mit fehlenden Referenzen argumentieren.** Eine Praxis hat kein
+  Portfolio bisheriger Arbeiten, und Patientenäußerungen sind nach
+  § 11 Abs. 1 Satz 1 Nr. 11 HWG nur eingeschränkt zulässig. Das Regelwerk
+  blendet diese Regel für Heilberufe deshalb aus (seit v2026-07-27.16) — der
+  Befund kommt gar nicht mehr an. Er darf auch nicht über einen anderen Weg
+  ins Anschreiben zurückkommen.
+- **Keine Aussagen über Behandlungserfolge**, auch nicht beiläufig
+  („mehr Patienten", „bessere Behandlungsergebnisse"). § 3 HWG verbietet
+  irreführende Werbung über Heilwirkungen; das betrifft auch, was ein
+  Dienstleister einer Praxis zu versprechen vorgibt. Es geht um Technik,
+  Auffindbarkeit und Recht der Website — nicht um Medizin.
+
 ---
 
 ## Zwei Kanäle, ein Text

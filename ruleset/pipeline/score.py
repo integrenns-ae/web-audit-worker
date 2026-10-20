@@ -194,6 +194,71 @@ def is_non_profit(crawl_meta: dict) -> bool:
     return False
 
 
+# Heilberufe: Titel-Marker. Wortgrenzen sind Pflicht - "hno" steckt sonst in
+# "Wohnort", und kurze Kuerzel treffen quer durch den Fliesstext.
+_HEILBERUF_TITEL = re.compile(
+    r"\b("
+    r"zahnarzt|zahnärzt\w*|zahnmedizin\w*|arztpraxis|zahnarztpraxis|"
+    r"hausarzt|hausärzt\w*|hausarztpraxis|facharzt|fachärzt\w*|"
+    r"kinderarzt|kinderärzt\w*|frauenarzt|frauenärzt\w*|hautarzt|hautärzt\w*|"
+    r"augenarzt|augenärzt\w*|tierarzt|tierärzt\w*|hno[\s-]?(arzt|ärzt\w*|praxis)|"
+    r"orthopäd\w*|radiolog\w*|urolog\w*|kardiolog\w*|dermatolog\w*|neurolog\w*|"
+    r"gynäkolog\w*|internist\w*|psychotherap\w*|psychiat\w*|heilpraktiker\w*|"
+    r"physiotherap\w*|logopäd\w*|ergotherap\w*|osteopath\w*|podolog\w*|hebamme|"
+    r"gemeinschaftspraxis|medizinisches\s+versorgungszentrum|mvz"
+    r")\b", re.I)
+
+# "Praxis" allein genuegt NICHT - es gibt die "Praxis fuer Unternehmensberatung".
+# Erst in Verbindung mit einem Arzttitel oder einem Heilkunde-Fachgebiet.
+_PRAXIS_TITEL = re.compile(
+    r"\bpraxis\s+(dr\.|dres\.|med\.|für\s+(allgemein|innere|zahn|kinder|"
+    r"psycho|physio|logo|ergo|ortho|naturheil|heil|zahnheil))", re.I)
+
+# Rechtsform-/Aufsichtsmarker im Impressum. Die beschreiben die eigene
+# Organisation, nicht eine bloss erwaehnte.
+_HEILBERUF_IMPRESSUM = re.compile(
+    r"(ärztekammer|zahnärztekammer|psychotherapeutenkammer|tierärztekammer|"
+    r"approbation|approbiert|kassenärztliche\s+vereinigung|kassenzahnärztliche|"
+    r"heilberufsgesetz|heilberufe[-\s]kammergesetz|heilpraktikergesetz|"
+    r"berufsordnung\s+(der|für)\s+(ärzte|zahnärzte|psychotherapeuten))", re.I)
+
+
+def is_heilberuf(crawl_meta: dict) -> bool:
+    """Arzt-, Zahnarzt-, Therapie- oder sonstige Heilberufspraxis?
+
+    Fuer sie passt die Regel inhalt.no_references_or_portfolio aus zwei
+    voneinander unabhaengigen Gruenden nicht:
+
+    1) **Sachlich.** Eine Praxis hat kein Portfolio bisheriger Arbeiten. Der
+       Kundensatz "Es fehlen Referenzen oder Beispiele bisheriger Arbeit"
+       ist dort derselbe Kategorienfehler wie bei einem Verein.
+    2) **Rechtlich heikles Gelaende.** Patientenaeusserungen sind nach
+       § 11 Abs. 1 Satz 1 Nr. 11 HWG seit der Novelle 2012 nicht pauschal
+       verboten, aber nur zulaessig, solange sie nicht missbraeuchlich,
+       abstossend oder irrefuehrend sind; Heilungsversprechen verbietet
+       § 3 HWG, und bei plastisch-chirurgischen Eingriffen ist die
+       Vorher-Nachher-Darstellung ausdruecklich untersagt. Ein Befund, der
+       faktisch "dir fehlen Referenzen" sagt, schiebt eine Praxis genau in
+       die eine Inhaltsform, fuer die sie einen Anwalt braucht.
+
+    Bewusst KONSERVATIV und identitaetsbasiert, wie is_non_profit:
+      1) Titel = Name der Seite (zuverlaessigster Ort)
+      2) Aufsichts-/Approbationsmarker im Impressum
+    Bewusst NICHT als Alleinsignal: ein blosses "Praxis" im Titel, oder
+    Woerter wie "Sprechzeiten"/"Termin" - die hat auch eine Kanzlei.
+    """
+    html = crawl_meta.get("html", "") or ""
+    title = _extract_title(html) or ""
+    imp = (crawl_meta.get("legal_subpages", {}).get("impressum", {})
+           .get("text_content", "") or "")
+
+    if _HEILBERUF_TITEL.search(title) or _PRAXIS_TITEL.search(title):
+        return True
+    if _HEILBERUF_IMPRESSUM.search(imp):
+        return True
+    return False
+
+
 def classify_business_locality(crawl_meta: dict) -> str:
     """Gibt "local", "non_local" oder "unknown" zurück. Siehe Kommentar oben:
     "non_local" nur bei positivem Nicht-lokal-Signal UND ohne Lokal-Signal."""
@@ -518,9 +583,16 @@ def score(infra: dict, perf: dict, network: dict, crawl_meta: dict, ruleset: dic
     # Kirchengemeinden) - die Regel sitzt in einer Kategorie, die sonst gilt,
     # daher regel- statt kategorieweise unterdrückt.
     non_profit = is_non_profit(crawl_meta)
+    heilberuf = is_heilberuf(crawl_meta)
+    organisationstyp = {"non_profit": non_profit, "heilberuf": heilberuf}
     suppressed_rules = set()
     for rid, cfg in ruleset.get("conditional_rules", {}).items():
-        if cfg.get("suppress_when") == "non_profit" and non_profit:
+        bedingungen = cfg.get("suppress_when")
+        # Eine einzelne Bedingung bleibt als String zulaessig (Abwaertskompatibilitaet),
+        # mehrere stehen als Liste.
+        if isinstance(bedingungen, str):
+            bedingungen = [bedingungen]
+        if any(organisationstyp.get(b) for b in bedingungen or []):
             suppressed_rules.add(rid)
 
     not_applicable = []
@@ -597,6 +669,7 @@ def score(infra: dict, perf: dict, network: dict, crawl_meta: dict, ruleset: dic
         "ruleset_version": ruleset["version"],
         "business_locality": locality,
         "is_non_profit": non_profit,
+        "is_heilberuf": heilberuf,
         "page_count": infra.get("page_count"),
         "suppressed_categories": sorted(suppressed),
         "suppressed_rules": sorted(suppressed_rules),

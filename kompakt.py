@@ -173,6 +173,10 @@ def verdichten(result: dict, *, geprueft_am: float | None = None,
         "seiten_geschaetzt": _seitenzahl(result.get("page_count")),
         "geschaeftstyp": result.get("business_locality"),
         "non_profit": bool(result.get("is_non_profit")),
+        # Fuer einen Agenten, der gezielt Aerzte sucht, ist das ein
+        # Auswahlsignal - und ein Warnsignal: Bei Heilberufen gilt das HWG,
+        # Aussagen ueber Behandlungserfolge gehoeren nicht ins Anschreiben.
+        "heilberuf": bool(result.get("is_heilberuf")),
         "regelwerk": result.get("ruleset_version"),
         "geprueft_am": _zeitstempel(geprueft_am),
         "cached": bool(cached),
