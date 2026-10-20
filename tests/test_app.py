@@ -210,7 +210,7 @@ def test_nicht_auditierbar_wird_durchgereicht(client_mit_audit, monkeypatch):
     import app as app_mod
     from audit import NotAuditableError
 
-    async def _kaputt(url: str) -> dict:
+    async def _kaputt(url: str, **_egal) -> dict:
         raise NotAuditableError("robots_disallow")
 
     monkeypatch.setattr(app_mod, "run_audit", _kaputt)
@@ -226,7 +226,7 @@ def test_unerwarteter_fehler_verraet_keine_interna(client_mit_audit, monkeypatch
 
     import app as app_mod
 
-    async def _explodiert(url: str) -> dict:
+    async def _explodiert(url: str, **_egal) -> dict:
         raise RuntimeError("Passwort=geheim in /opt/ruleset/secret.yaml")
 
     monkeypatch.setattr(app_mod, "run_audit", _explodiert)
@@ -531,7 +531,7 @@ def test_warten_liefert_das_fertige_ergebnis(client_mit_audit, monkeypatch):
     Werkzeug-Aufruf und kostet Tokens."""
     import app as app_mod
 
-    async def _langsam(url: str) -> dict:
+    async def _langsam(url: str, **_egal) -> dict:
         await asyncio.sleep(0.4)
         return {"overall": 64, "category_scores": {}, "findings": []}
 
@@ -644,7 +644,7 @@ def test_hintergrundlaeufe_lassen_einen_slot_frei(db, monkeypatch):
     gleichzeitig = 0
     hoechststand = 0
 
-    async def _zaehlend(url: str) -> dict:
+    async def _zaehlend(url: str, **_egal) -> dict:
         nonlocal gleichzeitig, hoechststand
         gleichzeitig += 1
         hoechststand = max(hoechststand, gleichzeitig)

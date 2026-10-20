@@ -160,7 +160,8 @@ def _subject(request: Request, client: Client) -> str:
     return request.client.host if request.client else "?"
 
 
-async def _run_job(job_id: str, url: str, hintergrund: bool = False) -> None:
+async def _run_job(job_id: str, url: str, hintergrund: bool = False,
+                   kontaktdaten: bool = False, keep_raw: bool = True) -> None:
     async with AsyncExitStack() as slots:
         # Reihenfolge ist wichtig: zuerst der Hintergrund-Slot, dann der
         # globale. Umgekehrt haelt ein Agentenlauf einen globalen Slot fest,
@@ -170,7 +171,8 @@ async def _run_job(job_id: str, url: str, hintergrund: bool = False) -> None:
             await slots.enter_async_context(SEM_HINTERGRUND)
         await slots.enter_async_context(SEM)
         try:
-            result = await run_audit(url)
+            result = await run_audit(url, kontaktdaten=kontaktdaten,
+                                     keep_raw=keep_raw)
             await asyncio.to_thread(store.finish_job, job_id, "done", result=result)
             log.info("job %s done overall=%s", job_id, result.get("overall"))
         except NotAuditableError as e:
@@ -231,7 +233,10 @@ async def enqueue(req: AuditReq, request: Request, x_shared_secret: str | None =
     # Die Job-ID ist der einzige Schutz davor, fremde Ergebnisse zu erraten.
     job_id = secrets.token_hex(16)
     await asyncio.to_thread(store.create_job, job_id, req.url, domain, client.id)
-    asyncio.create_task(_run_job(job_id, req.url, hintergrund=client.hintergrund))
+    asyncio.create_task(_run_job(job_id, req.url,
+                                 hintergrund=client.hintergrund,
+                                 kontaktdaten=client.kontaktdaten,
+                                 keep_raw=client.keep_raw))
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "pending"})
 
 

@@ -157,3 +157,22 @@ def test_echtes_ergebnis_wird_deutlich_kleiner(tmp_path):
     assert k["regelwerk"] == voll["ruleset_version"]
     assert k["geschaeftstyp"] == voll["business_locality"]
     assert len(k["kategorien"]) == len(voll["category_scores"])
+
+
+def test_makellose_seite_hat_keine_schwaechste_kategorie():
+    """Live aufgefallen: cbgg.de mit 100/100 wies "technik_performance" als
+    Schwachstelle aus, weil der Gleichstand bei 23/23 ans groesste Gewicht
+    ging. Der Agent haette daraus einen Hebel gelesen, den es nicht gibt."""
+    k = kompakt.verdichten({"category_scores": {
+        "technik_performance": 23, "mobil_zugaenglichkeit": 15, "recht": 20,
+        "auffindbarkeit_seo": 15, "lokale_sichtbarkeit": 12,
+        "inhalt_aktualitaet": 15}})
+    assert k["schwaechste_kategorie"] is None
+
+
+def test_eine_einzige_schwaeche_wird_trotzdem_gefunden():
+    k = kompakt.verdichten({"category_scores": {
+        "technik_performance": 23, "mobil_zugaenglichkeit": 15, "recht": 18,
+        "auffindbarkeit_seo": 15, "lokale_sichtbarkeit": 12,
+        "inhalt_aktualitaet": 15}})
+    assert k["schwaechste_kategorie"] == "recht"

@@ -22,7 +22,12 @@ import json
 import logging
 import os
 import re
+import shutil
+from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import urlparse
+
+import kontakt
 
 log = logging.getLogger("audit")
 
@@ -40,6 +45,74 @@ _NET_MARKERS = (
 
 class NotAuditableError(Exception):
     """Seite über https UND http nicht sauber abrufbar."""
+
+
+# Je Domain hoechstens ein Lauf gleichzeitig. [Sperre, Zaehler] je Domain.
+_domain_sperren: dict[str, list] = {}
+_sperren_guard = asyncio.Lock()
+
+
+@asynccontextmanager
+async def _nur_einmal_pro_domain(domain: str):
+    """Serialisiert Laeufe derselben Domain.
+
+    Zwei Gruende, einer davon ist nicht offensichtlich:
+
+    1. Die fremde Seite wird nie gleichzeitig doppelt gecrawlt.
+    2. Beim Loeschen der Rohdaten (keep_raw=False) ist dadurch eindeutig,
+       welche Lauf-Verzeichnisse zu DIESEM Lauf gehoeren. Ohne die Sperre
+       koennte ein Agentenlauf die Rohdaten eines parallel laufenden
+       Trichter-Laufs mitloeschen - und genau die sind die Vorher/Nachher-
+       Grundlage fuer compare.py.
+    """
+    async with _sperren_guard:
+        eintrag = _domain_sperren.get(domain)
+        if eintrag is None:
+            eintrag = [asyncio.Lock(), 0]
+            _domain_sperren[domain] = eintrag
+        eintrag[1] += 1
+    sperre = eintrag[0]
+    await sperre.acquire()
+    try:
+        yield
+    finally:
+        sperre.release()
+        async with _sperren_guard:
+            eintrag[1] -= 1
+            if eintrag[1] <= 0:
+                _domain_sperren.pop(domain, None)
+
+
+def _laufverzeichnisse(domain: str) -> set:
+    basis = Path(RULESET_DIR) / "runs" / domain
+    if not basis.is_dir():
+        return set()
+    try:
+        return {p for p in basis.iterdir() if p.is_dir()}
+    except OSError:
+        return set()
+
+
+def _rohdaten_loeschen(domain: str, vorher: set) -> None:
+    """Loescht die Lauf-Verzeichnisse, die in DIESEM Lauf entstanden sind.
+
+    Das KOMPLETTE Verzeichnis, nicht einzelne Dateien: Die Messwerte stehen
+    schon in jobs.result, alles uebrige ist redundant - und
+    <domain>_crawl.json enthaelt das vollstaendige HTML samt Impressumstext.
+
+    Der leere Domain-Ordner geht mit. Sonst waere runs/ nach einem Jahr ein
+    Verzeichnis fremder Firmennamen, auch wenn kein Byte Inhalt mehr darin
+    liegt.
+    """
+    for verzeichnis in _laufverzeichnisse(domain) - vorher:
+        shutil.rmtree(verzeichnis, ignore_errors=True)
+        log.info("Rohdaten verworfen: %s", verzeichnis)
+    basis = Path(RULESET_DIR) / "runs" / domain
+    try:
+        if basis.is_dir() and not any(basis.iterdir()):
+            basis.rmdir()
+    except OSError:
+        pass
 
 
 def _normalize(url: str) -> str:
@@ -60,11 +133,27 @@ def _ruleset_domain(url: str) -> str:
     return urlparse(u).netloc.lower().removeprefix("www.")
 
 
-async def run_audit(url: str) -> dict:
+async def run_audit(url: str, *, kontaktdaten: bool = False,
+                    keep_raw: bool = True) -> dict:
     domain = _ruleset_domain(url)
     if not domain:
         raise NotAuditableError("Ungültige URL")
+    async with _nur_einmal_pro_domain(domain):
+        # Bestand VOR dem Lauf merken, damit am Ende nur die eigenen
+        # Verzeichnisse geloescht werden.
+        vorher = _laufverzeichnisse(domain) if not keep_raw else set()
+        try:
+            return await _lauf(url, domain, kontaktdaten)
+        finally:
+            # Im finally, nicht im Erfolgsfall: Bei "NICHT AUDITIERBAR" kehrt
+            # das Regelwerk zurueck, NACHDEM der Crawl HTML und Screenshot
+            # geschrieben hat. Ohne das blieben genau die Faelle liegen, die
+            # nie ein Ergebnis erzeugt haben.
+            if not keep_raw:
+                await asyncio.to_thread(_rohdaten_loeschen, domain, vorher)
 
+
+async def _lauf(url: str, domain: str, kontaktdaten: bool) -> dict:
     proc = await asyncio.create_subprocess_exec(
         "python", "audit.py", url,
         cwd=RULESET_DIR,
@@ -96,8 +185,15 @@ async def run_audit(url: str) -> dict:
     pattern = os.path.join(RULESET_DIR, "runs", domain, "*", f"{domain}_score_result.json")
     files = sorted(glob.glob(pattern), key=os.path.getmtime)
     if proc.returncode == 0 and files:
-        with open(files[-1], encoding="utf-8") as fh:
-            return json.load(fh)
+        ergebnis_datei = Path(files[-1])
+        with open(ergebnis_datei, encoding="utf-8") as fh:
+            ergebnis = json.load(fh)
+        if kontaktdaten:
+            # MUSS hier passieren - gleich danach koennen die Rohdaten
+            # geloescht werden. Es wird keine zusaetzliche Seite abgerufen.
+            ergebnis["absender_kandidat"] = kontakt.aus_lauf(
+                ergebnis_datei.parent, domain)
+        return ergebnis
 
     # Kein Ergebnis: Crawl-/Netzwerkfehler (nicht auflösbar, Timeout, TLS …)
     # -> nicht_auditierbar, NICHT als interner Fehler.

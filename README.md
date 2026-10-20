@@ -74,6 +74,20 @@ Der Domain-Cooldown gilt **mandantenübergreifend**: Hat der Trichter eine
 Domain gerade geprüft, erbt ein Mandant das Ergebnis als eigenen Auftrag statt
 die fremde Seite ein zweites Mal zu crawlen.
 
+## Datenhaltung je Mandant
+
+- `keep_raw: false` — nach dem Lauf wird das komplette Lauf-Verzeichnis
+  gelöscht (HTML, Screenshot, Messdateien), der leere Domain-Ordner mit. Auch
+  bei gescheitertem Lauf, denn bei `NICHT AUDITIERBAR` hat der Crawl oft schon
+  geschrieben. Der Trichter behält seine Läufe — `compare.py` braucht sie.
+- `kontaktdaten: true` — Absenderdaten für den Briefkanal werden aus dem
+  bereits gecrawlten Impressum gelesen (keine zusätzliche Seitenabfrage).
+- `retention_days` — kürzere Aufbewahrung als die globalen zwölf Monate.
+
+Ein Lauf je Domain gleichzeitig (`audit._nur_einmal_pro_domain`): Die fremde
+Seite wird nie doppelt gecrawlt, und beim Löschen ist eindeutig, welche
+Verzeichnisse zu welchem Lauf gehören.
+
 ## Schutz / Limits
 
 - Rate-Limit je Absender (IP oder Mandant): Stunde + Tag, siehe oben.

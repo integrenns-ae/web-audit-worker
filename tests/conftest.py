@@ -132,7 +132,7 @@ def client(db, monkeypatch):
 
     import app as app_mod
 
-    async def _kein_lauf(job_id: str, url: str, hintergrund: bool = False) -> None:
+    async def _kein_lauf(job_id: str, url: str, **_egal) -> None:
         return None
 
     monkeypatch.setattr(app_mod, "_run_job", _kein_lauf)
@@ -148,7 +148,7 @@ def client_mit_audit(db, monkeypatch):
 
     import app as app_mod
 
-    async def _fake_audit(url: str) -> dict:
+    async def _fake_audit(url: str, **_egal) -> dict:
         return dict(FAKE_RESULT)
 
     monkeypatch.setattr(app_mod, "run_audit", _fake_audit)

@@ -14,7 +14,7 @@ beschreibt den Zielzustand; die Spalte **Stufe** sagt, was schon steht.
 | Mandanten (`clients.json`), Eigentumsprüfung | 1 | **fertig** |
 | Mandantenpfad bei jedem Deploy geprüft | 2 | **fertig** |
 | `?format=kompakt`, `?warten=`, Warteschlangen-Grenze, reservierter Slot | 3 | **fertig** |
-| `keep_raw`, `absender_kandidat` | 4 | offen |
+| `keep_raw`, `absender_kandidat`, `retention_days` | 4 | **fertig** |
 | Schlüssel für Vilikon | 5 | wartet auf den Credstore-Eintrag |
 
 ---
@@ -177,7 +177,9 @@ nicht geschätzt. Als Text in einem Modellaufruf ist das Verschwendung.
 - `kategorien` nennt je Kategorie `[erreicht, maximal]` — damit ist der
   Hebel ohne Gewichtstabelle ablesbar.
 - `schwaechste_kategorie` ist **relativ** zum Gewicht bestimmt, nicht nach
-  absoluten Punkten.
+  absoluten Punkten — und ist `null`, wenn die Seite in jeder Kategorie die
+  volle Punktzahl hat. Eine makellose Seite hat keinen Hebel, und der Agent
+  soll keinen erfinden.
 - `top_findings` sind höchstens drei, nach Punktabzug sortiert, Text auf 300
   Zeichen gekürzt, **nur** `message_customer`.
 - `geprueft_am` kommt aus dem Worker (`jobs.finished_at`), nicht aus dem
@@ -203,10 +205,25 @@ Impressum gelesen, das der Crawl ohnehin abruft:
 }
 ```
 
-Felder können fehlen oder falsch sein — das ist eine Textextraktion, keine
-Datenbankabfrage. **Vor dem Druck prüfen.** Dass diese Daten bei Praxen und
-Einzelunternehmern personenbezogen sind, ist der Grund für die
-Art.-14-Information im Erstkontakt und für `retention_days`.
+Gelesen wird der Impressumstext, den der Crawl ohnehin abruft — **es wird
+keine zusätzliche Seite geladen**, die fremde Website wird dafür nicht ein
+einziges Mal mehr angefasst.
+
+Einzelne Felder können `null` sein; der ganze Block fehlt, wenn im Impressum
+weder Anschrift noch E-Mail stand. Das ist Absicht: Eine falsche Anschrift auf
+einem Brief ist schlimmer als keine. **Vor dem Druck prüfen** — Impressen sind
+handgeschriebene Prosa in beliebiger Reihenfolge.
+
+Dass diese Daten bei Praxen, Kanzleien und Einzelunternehmern personenbezogen
+sind, ist der Grund für die Art.-14-Information im Erstkontakt und für
+`retention_days`.
+
+Mit `keep_raw: false` löscht der Worker nach dem Lauf das **komplette**
+Lauf-Verzeichnis — HTML, Screenshot, Messdateien — und den Domain-Ordner, wenn
+er leer zurückbleibt. Sonst wäre `runs/` nach einem Jahr ein Verzeichnis
+fremder Firmennamen. Gelöscht wird auch dann, wenn der Lauf gescheitert ist:
+Bei `NICHT AUDITIERBAR` hat der Crawl oft schon geschrieben, obwohl nie ein
+Score entstand.
 
 ---
 

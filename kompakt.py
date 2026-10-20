@@ -92,13 +92,26 @@ def _schwaechste(kategorien: dict[str, list[int]]) -> str | None:
     Sonst waere `lokale_sichtbarkeit: [5, 12]` schlechter als
     `recht: [6, 20]` - obwohl Letzteres der groessere Hebel ist. Bei
     Gleichstand gewinnt die Kategorie mit dem groesseren Gewicht.
+
+    Bei einer makellosen Seite gibt es keine schwaechste Kategorie: None.
+    Sonst haette cbgg.de mit 100/100 als Schwachstelle
+    "technik_performance" ausgewiesen - und der Agent haette einen Hebel
+    gesehen, den es nicht gibt.
     """
     if not kategorien:
         return None
+
+    def anteil(werte: list[int]) -> float:
+        erreicht, maximal = werte
+        return erreicht / maximal if maximal else 1.0
+
+    if all(anteil(w) >= 1.0 for w in kategorien.values()):
+        return None
+
     def schluessel(eintrag):
-        name, (erreicht, maximal) = eintrag
-        anteil = erreicht / maximal if maximal else 1.0
-        return (anteil, -maximal, name)
+        name, werte = eintrag
+        return (anteil(werte), -werte[1], name)
+
     return min(kategorien.items(), key=schluessel)[0]
 
 
@@ -146,4 +159,9 @@ def verdichten(result: dict, *, geprueft_am: float | None = None,
         "geprueft_am": _zeitstempel(geprueft_am),
         "cached": bool(cached),
     }
+    # Nur vorhanden, wenn der Mandant kontaktdaten:true hat UND im Impressum
+    # etwas Brauchbares stand.
+    kandidat = result.get("absender_kandidat")
+    if isinstance(kandidat, dict):
+        antwort["absender_kandidat"] = kandidat
     return antwort
