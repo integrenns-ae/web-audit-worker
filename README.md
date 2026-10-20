@@ -26,6 +26,10 @@ GET  /health                          -> {status:"ok"}
 `status`: `pending` | `done` (+`result`) | `nicht_auditierbar` (+`grund`) | `failed` (+`grund`).
 Alle Aufrufe (außer `/health`) erfordern Header `X-Shared-Secret`.
 
+**Für Aufrufer von außen** (Akquise-Agent auf dem Vilikon-VPS) ist
+[`API.md`](API.md) der verbindliche Vertrag: Mandanten, Limits, kompaktes
+Antwortformat, Fehlergründe und die Betriebsfallen.
+
 Der Audit läuft asynchron (~30–60 s realer Crawl). Enqueue → `job_id` → Status pollen.
 
 ## `result`-Struktur
@@ -39,9 +43,13 @@ negativ, `message_customer` = kundentauglich, `message_internal` = intern), `pag
 ## Scoring-Naht
 
 `audit.run_audit(url) -> result` ist die **einzige** Stelle für die Score-Logik.
-Aktuell steckt dort ein ehrlicher Basis-Audit (httpx + BeautifulSoup über das
-Roh-HTML). Das vollständige **Ruleset** ersetzt genau diese Funktion (gleiche
-`result`-Form).
+Dort läuft das vendorte **Regelwerk** (`ruleset/`) als Subprozess; gelesen wird
+anschließend das erzeugte `<domain>_score_result.json`.
+
+Das Regelwerk liegt **doppelt**: Quelle ist das Repo `web-audit-ruleset`,
+produktiv ist allein die Kopie unter `ruleset/`. Das Dockerfile kopiert sie beim
+Bauen nach `/opt/ruleset` — nach Regeländerungen ist `docker compose up -d
+--build` deshalb Pflicht, ein `restart` ließe die alte Version laufen.
 
 ## Schutz / Limits
 
@@ -49,6 +57,20 @@ Roh-HTML). Das vollständige **Ruleset** ersetzt genau diese Funktion (gleiche
 - Domain-Cooldown 10 min mit Ergebnis-Cache (spart Kosten, kein Limit-Verbrauch).
 - Global max. 3 gleichzeitige Audits (Semaphore, Rest wartet).
 - SQLite-Job-Store (persistent, überlebt Neustarts).
+
+## Tests
+
+```sh
+python3 -m pip install -r requirements.txt -r requirements-dev.txt
+python3 -m pytest tests/ -q          # Worker: Trichter-Vertrag (43)
+cd ruleset && python3 -m pytest tests/ -q   # Regelwerk (54)
+```
+
+`tests/` sichert den Vertrag ab, auf den sich `/website-check` verlässt: Auth,
+Rate-Limit pro Absender, Domain-Cooldown ohne Limit-Verbrauch, Statusabfrage,
+Crash-Recovery und die Löschfristen, die die Datenschutzerklärung zusagt. Beide
+Suiten laufen **ohne Netzwerk und ohne Chromium** und sind Teil der CI — ein
+Push mit rotem Test deployt nicht.
 
 ## Deploy
 

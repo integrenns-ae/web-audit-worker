@@ -84,7 +84,11 @@ async def _prune_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    store.mark_stale_pending_failed(older_than_s=900)   # Crash-Recovery
+    # Crash-Recovery: Nach einem Neustart ist JEDER pending-Job verwaist -
+    # die zugehoerige Task ist mit dem Prozess gestorben. Mit dem frueheren
+    # Grenzwert von 900s blieben jung gestorbene Jobs fuer immer pending,
+    # und der Trichter pollte sie endlos.
+    store.mark_stale_pending_failed(older_than_s=0)
     store.cleanup_req_log(older_than_s=IP_MAX_AGE_S)
     store.cleanup_jobs(older_than_s=JOBS_MAX_AGE_S)
     prune_task = asyncio.create_task(_prune_loop())
@@ -154,7 +158,8 @@ async def enqueue(req: AuditReq, request: Request, x_shared_secret: str | None =
             detail="Zu viele Pruefungen. Bitte kontaktieren Sie uns direkt.")
 
     await asyncio.to_thread(store.log_request, ip)
-    job_id = secrets.token_hex(4)
+    # Die Job-ID ist der einzige Schutz davor, fremde Ergebnisse zu erraten.
+    job_id = secrets.token_hex(16)
     await asyncio.to_thread(store.create_job, job_id, req.url, domain)
     asyncio.create_task(_run_job(job_id, req.url))
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "pending"})

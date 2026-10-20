@@ -23,6 +23,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Worker-Tests
+        # Der Vertrag des Website-Trichters: Auth, Rate-Limit, Domain-Cooldown,
+        # Statusabfrage, Crash-Recovery und die zugesagten Loeschfristen.
+        # Laeuft ohne Netzwerk und ohne Chromium.
+        run: |
+          python3 -m pip install --quiet -r requirements.txt -r requirements-dev.txt
+          python3 -m pytest tests/ -q
+
       - name: Regelwerk-Tests
         # Läuft ohne Netzwerk und ohne Playwright – fängt Regelfehler ab,
         # bevor sie auf den Server kommen.

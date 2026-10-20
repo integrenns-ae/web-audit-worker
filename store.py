@@ -123,6 +123,10 @@ def cleanup_jobs(older_than_s: int) -> None:
     _c().execute(
         "DELETE FROM jobs WHERE COALESCE(finished_at, created_at) < ?", (cutoff,)
     )
+    # Ohne commit() blieb das DELETE in einer offenen Transaktion haengen, bis
+    # zufaellig eine andere Funktion committete - die zugesagte Loeschfrist war
+    # damit faktisch nicht eingehalten.
+    _c().commit()
 
 
 def cleanup_req_log(older_than_s: int) -> None:
