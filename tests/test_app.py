@@ -260,12 +260,18 @@ def test_start_raeumt_haengende_jobs_auf(db, monkeypatch):
 from conftest import AGENT_AUTH, AGENT_EINTRAG  # noqa: E402
 
 
-def test_mandant_bekommt_eigene_limits(client, mandanten_datei):
-    """Der Agent darf 20 pro Stunde, der Trichter 5. Beide zaehlen getrennt."""
+def test_mandant_bekommt_eigene_limits(client, db, mandanten_datei):
+    """Der Agent darf 20 pro Stunde, der Trichter 5. Beide zaehlen getrennt.
+
+    Die Auftraege werden unterwegs abgeschlossen - sonst greift vorher die
+    Warteschlangen-Grenze (max_queued), und der Test wuerde das falsche
+    Limit messen.
+    """
     mandanten_datei([AGENT_EINTRAG])
     for i in range(20):
         r = client.post("/audit", json={"url": f"agent{i}.de"}, headers=AGENT_AUTH)
         assert r.status_code == 202, f"Agent-Aufruf {i + 1} abgewiesen"
+        db.finish_job(r.json()["job_id"], "done", result={"overall": 50})
     assert client.post("/audit", json={"url": "zuviel.de"},
                        headers=AGENT_AUTH).status_code == 429
 
@@ -274,7 +280,7 @@ def test_mandant_bekommt_eigene_limits(client, mandanten_datei):
                        headers=AUTH).status_code == 202
 
 
-def test_mandant_kann_sein_limit_nicht_per_header_zuruecksetzen(client, mandanten_datei):
+def test_mandant_kann_sein_limit_nicht_per_header_zuruecksetzen(client, db, mandanten_datei):
     """Die eigentliche Haertung: Vorher setzte jeder Geheimnis-Inhaber per
     X-Client-IP eine frei erfundene IP - und damit sein Limit beliebig oft
     zurueck. Das Limit zaehlt jetzt gegen den Mandanten."""
@@ -283,6 +289,7 @@ def test_mandant_kann_sein_limit_nicht_per_header_zuruecksetzen(client, mandante
         r = client.post("/audit", json={"url": f"a{i}.de"},
                         headers={**AGENT_AUTH, "X-Client-IP": f"10.1.1.{i}"})
         assert r.status_code == 202
+        db.finish_job(r.json()["job_id"], "done", result={"overall": 50})
     r = client.post("/audit", json={"url": "nochmal.de"},
                     headers={**AGENT_AUTH, "X-Client-IP": "10.9.9.9"})
     assert r.status_code == 429, "Mandant hat sein Limit per Header umgangen"
@@ -440,3 +447,224 @@ def test_geerbtes_ergebnis_verbraucht_kein_limit(client, db, mandanten_datei):
         assert client.post("/audit", json={"url": "example.de"},
                            headers=AGENT_AUTH).status_code == 200
     assert db.count_requests("client:vilikon", 3600) == 0
+
+
+# ===========================================================================
+# Antwortformat, Long-Poll, Fairness (Stufe 3)
+# ===========================================================================
+
+import asyncio  # noqa: E402
+
+import kompakt  # noqa: E402
+
+
+def test_kompaktes_format_statt_vollem_ergebnis(client, db, mandanten_datei):
+    mandanten_datei([AGENT_EINTRAG])
+    db.create_job("fertig", "https://example.de/", "example.de", client_id="vilikon")
+    db.finish_job("fertig", "done", result={
+        "domain": "example.de", "overall": 42,
+        "category_scores": {"recht": 0, "technik_performance": 20},
+        "findings": [{"category": "recht", "score_impact": -20,
+                      "message_customer": "Kein Impressum.",
+                      "message_internal": "GEHEIMER-INTERNER-TEXT"}],
+    })
+
+    body = client.get("/audit/fertig?format=kompakt", headers=AGENT_AUTH).json()
+    assert body["overall"] == 42
+    assert body["kategorien"]["recht"] == [0, 20]
+    assert body["schwaechste_kategorie"] == "recht"
+    assert body["top_findings"][0]["text"] == "Kein Impressum."
+    assert body["geprueft_am"].endswith("Z")
+    assert "result" not in body
+
+
+def test_kompaktes_format_verraet_keine_interna(client, db, mandanten_datei):
+    mandanten_datei([AGENT_EINTRAG])
+    db.create_job("fertig", "https://example.de/", "example.de", client_id="vilikon")
+    db.finish_job("fertig", "done", result={
+        "findings": [{"category": "recht", "score_impact": -20,
+                      "message_customer": "Kundentext.",
+                      "message_internal": "GEHEIMER-INTERNER-TEXT"}],
+    })
+    roh = client.get("/audit/fertig?format=kompakt", headers=AGENT_AUTH).text
+    assert "GEHEIMER-INTERNER-TEXT" not in roh
+
+
+def test_volles_format_bleibt_der_standard(client, db):
+    """Der Trichter darf sich nicht veraendern - er liest result[]."""
+    db.create_job("fertig", "https://example.de/", "example.de")
+    db.finish_job("fertig", "done", result={"overall": 42, "findings": []})
+    body = client.get("/audit/fertig", headers=AUTH).json()
+    assert body == {"status": "done", "result": {"overall": 42, "findings": []}}
+
+
+def test_unbekanntes_format_wird_abgewiesen(client, db):
+    db.create_job("fertig", "https://example.de/", "example.de")
+    db.finish_job("fertig", "done", result={"overall": 1})
+    assert client.get("/audit/fertig?format=xml", headers=AUTH).status_code == 422
+
+
+def test_kompaktes_format_meldet_wiederverwendung(client, db, mandanten_datei):
+    """cached wird nicht gespeichert, sondern abgeleitet: Ein geerbtes
+    Ergebnis wurde spaeter angelegt als es fertig wurde."""
+    mandanten_datei([AGENT_EINTRAG])
+    db.create_job("vomtrichter", "https://example.de/", "example.de",
+                  client_id="trichter")
+    db.finish_job("vomtrichter", "done", result={"overall": 61})
+
+    geerbt = client.post("/audit", json={"url": "example.de"},
+                         headers=AGENT_AUTH).json()["job_id"]
+    body = client.get(f"/audit/{geerbt}?format=kompakt", headers=AGENT_AUTH).json()
+    assert body["cached"] is True
+
+    eigen = client.post("/audit", json={"url": "frisch.de"},
+                        headers=AGENT_AUTH).json()["job_id"]
+    db.finish_job(eigen, "done", result={"overall": 70})
+    assert client.get(f"/audit/{eigen}?format=kompakt",
+                      headers=AGENT_AUTH).json()["cached"] is False
+
+
+# --- Long-Poll --------------------------------------------------------------
+
+def test_warten_liefert_das_fertige_ergebnis(client_mit_audit, monkeypatch):
+    """Ohne Long-Poll muesste der Agent pollen - jeder Poll ist bei ihm ein
+    Werkzeug-Aufruf und kostet Tokens."""
+    import app as app_mod
+
+    async def _langsam(url: str) -> dict:
+        await asyncio.sleep(0.4)
+        return {"overall": 64, "category_scores": {}, "findings": []}
+
+    monkeypatch.setattr(app_mod, "run_audit", _langsam)
+    job_id = client_mit_audit.post("/audit", json={"url": "example.de"},
+                                   headers=AUTH).json()["job_id"]
+
+    r = client_mit_audit.get(f"/audit/{job_id}?warten=5", headers=AUTH)
+    assert r.status_code == 200
+    assert r.json()["status"] == "done"
+    assert r.json()["result"]["overall"] == 64
+
+
+def test_warten_gibt_nach_ablauf_pending_zurueck(client):
+    job_id = client.post("/audit", json={"url": "example.de"},
+                         headers=AUTH).json()["job_id"]
+    begonnen = time.monotonic()
+    r = client.get(f"/audit/{job_id}?warten=1", headers=AUTH)
+    gedauert = time.monotonic() - begonnen
+    assert r.json() == {"status": "pending"}
+    assert 0.8 < gedauert < 3.0, f"Wartezeit war {gedauert:.2f}s"
+
+
+def test_warten_haelt_fremde_auftraege_nicht_hin(client, mandanten_datei):
+    """Die Eigentumspruefung laeuft VOR dem Warten - sonst koennte ein
+    Mandant mit erfundenen IDs Verbindungen blockieren."""
+    mandanten_datei([AGENT_EINTRAG])
+    fremd = client.post("/audit", json={"url": "besucher.de"},
+                        headers=AUTH).json()["job_id"]
+    begonnen = time.monotonic()
+    r = client.get(f"/audit/{fremd}?warten=60", headers=AGENT_AUTH)
+    gedauert = time.monotonic() - begonnen
+    assert r.status_code == 404
+    assert gedauert < 2.0, f"404 kam erst nach {gedauert:.2f}s"
+
+
+def test_warten_ausserhalb_des_bereichs_wird_abgewiesen(client):
+    job_id = client.post("/audit", json={"url": "example.de"},
+                         headers=AUTH).json()["job_id"]
+    for ungueltig in ("61", "-1", "viel"):
+        r = client.get(f"/audit/{job_id}?warten={ungueltig}", headers=AUTH)
+        assert r.status_code == 422, f"warten={ungueltig} wurde akzeptiert"
+
+
+def test_ohne_warten_kommt_pending_sofort(client):
+    job_id = client.post("/audit", json={"url": "example.de"},
+                         headers=AUTH).json()["job_id"]
+    begonnen = time.monotonic()
+    assert client.get(f"/audit/{job_id}", headers=AUTH).json() == {"status": "pending"}
+    assert time.monotonic() - begonnen < 1.0
+
+
+# --- Warteschlangen-Grenze --------------------------------------------------
+
+def test_mandant_darf_nicht_unbegrenzt_auftuermen(client, mandanten_datei):
+    mandanten_datei([AGENT_EINTRAG])          # max_queued = 2
+    for i in range(2):
+        assert client.post("/audit", json={"url": f"a{i}.de"},
+                           headers=AGENT_AUTH).status_code == 202
+    r = client.post("/audit", json={"url": "a3.de"}, headers=AGENT_AUTH)
+    assert r.status_code == 429
+    assert "Auftraege" in r.json()["detail"]
+
+
+def test_volle_warteschlange_verbraucht_kein_limit(client, db, mandanten_datei):
+    """Sonst wuerde ein Agent, der seine Ergebnisse nicht abholt, zusaetzlich
+    sein Tageslimit verlieren - zwei Strafen fuer einen Fehler."""
+    mandanten_datei([AGENT_EINTRAG])
+    for i in range(2):
+        client.post("/audit", json={"url": f"a{i}.de"}, headers=AGENT_AUTH)
+    vorher = db.count_requests("client:vilikon", 3600)
+    for _ in range(5):
+        assert client.post("/audit", json={"url": "a9.de"},
+                           headers=AGENT_AUTH).status_code == 429
+    assert db.count_requests("client:vilikon", 3600) == vorher
+
+
+def test_abgeholte_ergebnisse_machen_die_warteschlange_wieder_frei(client, db, mandanten_datei):
+    mandanten_datei([AGENT_EINTRAG])
+    erste = client.post("/audit", json={"url": "a0.de"}, headers=AGENT_AUTH).json()["job_id"]
+    client.post("/audit", json={"url": "a1.de"}, headers=AGENT_AUTH)
+    assert client.post("/audit", json={"url": "a2.de"},
+                       headers=AGENT_AUTH).status_code == 429
+    db.finish_job(erste, "done", result={"overall": 1})
+    assert client.post("/audit", json={"url": "a2.de"},
+                       headers=AGENT_AUTH).status_code == 202
+
+
+def test_trichter_hat_keine_warteschlangen_grenze(client):
+    """Viele echte Besucher gleichzeitig sind normal, nicht verdaechtig."""
+    for i in range(5):
+        assert client.post("/audit", json={"url": f"b{i}.de"},
+                           headers=AUTH).status_code == 202
+
+
+# --- Reservierter Nebenlaeufigkeits-Slot -----------------------------------
+
+def test_hintergrund_hat_einen_slot_weniger():
+    import app as app_mod
+
+    assert app_mod.SEM_HINTERGRUND._value == app_mod.MAX_CONCURRENT - 1
+    assert app_mod.SEM_HINTERGRUND._value >= 1
+
+
+def test_hintergrundlaeufe_lassen_einen_slot_frei(db, monkeypatch):
+    """Ein echter Besucher soll nie darauf warten, dass der Agent gerade
+    zwanzig Seiten durchprueft."""
+    import app as app_mod
+
+    gleichzeitig = 0
+    hoechststand = 0
+
+    async def _zaehlend(url: str) -> dict:
+        nonlocal gleichzeitig, hoechststand
+        gleichzeitig += 1
+        hoechststand = max(hoechststand, gleichzeitig)
+        await asyncio.sleep(0.05)
+        gleichzeitig -= 1
+        return {"overall": 1}
+
+    monkeypatch.setattr(app_mod, "run_audit", _zaehlend)
+
+    async def lauf(hintergrund: bool) -> int:
+        nonlocal gleichzeitig, hoechststand
+        gleichzeitig = hoechststand = 0
+        # Frische Semaphoren fuer diese Ereignisschleife.
+        monkeypatch.setattr(app_mod, "SEM", asyncio.Semaphore(3))
+        monkeypatch.setattr(app_mod, "SEM_HINTERGRUND", asyncio.Semaphore(2))
+        await asyncio.gather(*[
+            app_mod._run_job(f"j{i}", "example.de", hintergrund=hintergrund)
+            for i in range(6)
+        ])
+        return hoechststand
+
+    assert asyncio.run(lauf(hintergrund=True)) == 2, "Agent belegte alle Slots"
+    assert asyncio.run(lauf(hintergrund=False)) == 3, "Trichter bekam nicht alle Slots"

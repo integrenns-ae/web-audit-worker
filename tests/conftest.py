@@ -36,6 +36,9 @@ os.environ["AUDIT_MAX_CONCURRENT"] = "3"
 # Produktionsdatenbank /data/audit.db anfassen.
 os.environ["AUDIT_DB_PATH"] = "/dev/null/niemals-benutzen/audit.db"
 os.environ["AUDIT_CLIENTS_PATH"] = "/dev/null/niemals-benutzen/clients.json"
+# Echtes Regelwerk aus dem Repo - damit der Drift-Test in test_kompakt.py die
+# Gewichtstabelle gegen ruleset.yaml pruefen kann.
+os.environ["RULESET_DIR"] = str(REPO / "ruleset")
 
 import pytest  # noqa: E402
 
@@ -50,15 +53,26 @@ def sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def tmp_pfad_runs() -> Path:
+    """Leeres Verzeichnis, damit prune_old_runs() nie echte Laeufe anfasst."""
+    import tempfile
+
+    return Path(tempfile.mkdtemp(prefix="runs-test-"))
+
+
 @pytest.fixture(autouse=True)
 def _mandanten_cache_leeren():
     """clients.py haelt die geladene clients.json in einem Modul-Cache.
     Ohne dieses Zuruecksetzen wuerde ein Test den naechsten beeinflussen."""
     import clients
 
+    import kompakt
+
     clients.reload()
+    kompakt.reload()
     yield
     clients.reload()
+    kompakt.reload()
 
 
 @pytest.fixture
@@ -118,10 +132,11 @@ def client(db, monkeypatch):
 
     import app as app_mod
 
-    async def _kein_lauf(job_id: str, url: str) -> None:
+    async def _kein_lauf(job_id: str, url: str, hintergrund: bool = False) -> None:
         return None
 
     monkeypatch.setattr(app_mod, "_run_job", _kein_lauf)
+    monkeypatch.setattr(app_mod, "RUNS_DIR", tmp_pfad_runs())
     with TestClient(app_mod.app) as c:
         yield c
 
@@ -137,6 +152,7 @@ def client_mit_audit(db, monkeypatch):
         return dict(FAKE_RESULT)
 
     monkeypatch.setattr(app_mod, "run_audit", _fake_audit)
+    monkeypatch.setattr(app_mod, "RUNS_DIR", tmp_pfad_runs())
     with TestClient(app_mod.app) as c:
         yield c
 

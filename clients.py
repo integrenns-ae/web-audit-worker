@@ -66,6 +66,15 @@ class Client:
     kontaktdaten: bool = False
     retention_days: int | None = None
 
+    @property
+    def hintergrund(self) -> bool:
+        """True fuer Maschinen-Mandanten.
+
+        Sie bekommen einen Nebenlaeufigkeits-Slot weniger, damit ein echter
+        Besucher nie darauf wartet, dass der Agent 20 Seiten durchprueft.
+        """
+        return self.limit_scope == "client"
+
 
 def _legacy_secret() -> str:
     return os.environ.get("AUDIT_SHARED_SECRET", "")

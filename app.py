@@ -21,14 +21,15 @@ import os
 import secrets
 import shutil
 import time
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 import clients
+import kompakt
 import store
 from audit import NotAuditableError, _host, run_audit
 from clients import Client
@@ -40,6 +41,14 @@ MAX_CONCURRENT = int(os.environ.get("AUDIT_MAX_CONCURRENT", "3"))
 MAX_URL = 300
 
 SEM = asyncio.Semaphore(MAX_CONCURRENT)
+# Ein Slot bleibt dem Trichter reserviert: Hintergrund-Mandanten duerfen
+# hoechstens MAX_CONCURRENT-1 gleichzeitig belegen. Ein echter Besucher wartet
+# damit nie darauf, dass der Akquise-Agent gerade 20 Seiten durchprueft.
+SEM_HINTERGRUND = asyncio.Semaphore(max(1, MAX_CONCURRENT - 1))
+
+# Taktung des Long-Polls (?warten=). Haeufiger abzufragen bringt nichts, weil
+# ein Audit 30-60 Sekunden dauert.
+POLL_INTERVALL_S = 0.5
 
 RUNS_DIR = Path(os.environ.get("RULESET_DIR", "/opt/ruleset")) / "runs"
 RUNS_MAX_AGE_S = int(os.environ.get("AUDIT_RUNS_MAX_AGE_DAYS", "360")) * 86400
@@ -151,8 +160,15 @@ def _subject(request: Request, client: Client) -> str:
     return request.client.host if request.client else "?"
 
 
-async def _run_job(job_id: str, url: str) -> None:
-    async with SEM:   # globale Obergrenze gleichzeitiger Audits
+async def _run_job(job_id: str, url: str, hintergrund: bool = False) -> None:
+    async with AsyncExitStack() as slots:
+        # Reihenfolge ist wichtig: zuerst der Hintergrund-Slot, dann der
+        # globale. Umgekehrt haelt ein Agentenlauf einen globalen Slot fest,
+        # waehrend er noch auf seinen Hintergrund-Slot wartet - und blockiert
+        # genau den Besucher, den die Reservierung schuetzen soll.
+        if hintergrund:
+            await slots.enter_async_context(SEM_HINTERGRUND)
+        await slots.enter_async_context(SEM)
         try:
             result = await run_audit(url)
             await asyncio.to_thread(store.finish_job, job_id, "done", result=result)
@@ -195,6 +211,15 @@ async def enqueue(req: AuditReq, request: Request, x_shared_secret: str | None =
         return JSONResponse(status_code=200,
             content={"job_id": eigene_id, "status": "done", "cached": True})
 
+    # Warteschlangen-Grenze: Wer seine Ergebnisse nicht abholt, soll nicht
+    # weiter Auftraege auftuermen. Vor dem Rate-Limit geprueft, damit ein
+    # ueberfuelltes Postfach nicht zusaetzlich das Tageslimit verbraucht.
+    if client.max_queued:
+        offen = await asyncio.to_thread(store.count_pending_for_client, client.id)
+        if offen >= client.max_queued:
+            raise HTTPException(status_code=429,
+                detail=f"Es laufen schon {offen} Auftraege. Bitte erst Ergebnisse abholen.")
+
     # Rate-Limit (Stunde + Tag), gezaehlt gegen subject.
     per_hour = await asyncio.to_thread(store.count_requests, subject, 3600)
     per_day = await asyncio.to_thread(store.count_requests, subject, 86400)
@@ -206,20 +231,51 @@ async def enqueue(req: AuditReq, request: Request, x_shared_secret: str | None =
     # Die Job-ID ist der einzige Schutz davor, fremde Ergebnisse zu erraten.
     job_id = secrets.token_hex(16)
     await asyncio.to_thread(store.create_job, job_id, req.url, domain, client.id)
-    asyncio.create_task(_run_job(job_id, req.url))
+    asyncio.create_task(_run_job(job_id, req.url, hintergrund=client.hintergrund))
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "pending"})
 
 
+def _gehoert(job: dict | None, client: Client) -> bool:
+    if not job:
+        return False
+    return (job.get("client_id") or clients.LEGACY_CLIENT_ID) == client.id
+
+
 @app.get("/audit/{job_id}")
-async def status(job_id: str, x_shared_secret: str | None = Header(default=None)):
+async def status(
+    job_id: str,
+    antwortformat: str = Query("voll", alias="format", pattern="^(voll|kompakt)$"),
+    warten: int = Query(0, ge=0, le=60),
+    x_shared_secret: str | None = Header(default=None),
+):
     client = _resolve_client(x_shared_secret)
     job = await asyncio.to_thread(store.get_job, job_id)
     # Fremde Auftraege sehen aus wie unbekannte: 404, nicht 403. Ein 403 waere
     # ein Orakel - es wuerde bestaetigen, dass es diese job_id gibt.
-    if not job or (job.get("client_id") or clients.LEGACY_CLIENT_ID) != client.id:
+    if not _gehoert(job, client):
         raise HTTPException(status_code=404, detail="Unbekannter Job.")
+
+    # Long-Poll. Jeder Poll ist beim Agenten ein Werkzeug-Aufruf und kostet
+    # Tokens; ein Audit dauert 30-60 Sekunden. Die Eigentumspruefung ist
+    # bewusst VORHER gelaufen - eine fremde job_id haelt die Verbindung nicht.
+    if warten and job["status"] == "pending":
+        frist = time.monotonic() + warten
+        while job["status"] == "pending" and time.monotonic() < frist:
+            await asyncio.sleep(POLL_INTERVALL_S)
+            job = await asyncio.to_thread(store.get_job, job_id)
+            if not _gehoert(job, client):
+                raise HTTPException(status_code=404, detail="Unbekannter Job.")
+
     s = job["status"]
     if s == "done":
+        if antwortformat == "kompakt":
+            # Ein geerbtes Ergebnis wurde spaeter angelegt als es fertig
+            # wurde - daran ist eine Wiederverwendung erkennbar, ohne sie
+            # zusaetzlich speichern zu muessen.
+            geerbt = (job.get("created_at") or 0) > (job.get("finished_at") or 0)
+            return kompakt.verdichten(job["result"] or {},
+                                      geprueft_am=job.get("finished_at"),
+                                      cached=geerbt)
         return {"status": "done", "result": job["result"]}
     if s in ("nicht_auditierbar", "failed"):
         return {"status": s, "grund": job.get("grund") or ""}

@@ -188,6 +188,16 @@ def count_requests(subject: str, within_s: int) -> int:
 
 
 @_synchronisiert
+def count_pending_for_client(client_id: str) -> int:
+    """Offene Auftraege eines Mandanten (fuer max_queued)."""
+    row = _c().execute(
+        "SELECT COUNT(*) AS n FROM jobs WHERE client_id=? AND status='pending'",
+        (client_id,),
+    ).fetchone()
+    return int(row["n"]) if row else 0
+
+
+@_synchronisiert
 def cleanup_jobs(older_than_s: int) -> None:
     """Alte Auftraege samt URL und Ergebnis loeschen.
 

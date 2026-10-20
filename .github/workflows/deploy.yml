@@ -105,13 +105,46 @@ jobs:
             echo "Regelwerk im Container: \$LIVE"
             [ "\$LIVE" = "${RULESET_VERSION}" ] || { echo "FEHLER: erwartet ${RULESET_VERSION}"; exit 1; }
             docker exec -w /opt/ruleset audit-worker python -m pytest tests/ -q 2>&1 | tail -2
+
+            # Mandantenliste im LAUFENDEN Container. Beweist, dass clients.json
+            # lesbar und gueltig ist - ohne irgendein Geheimnis zu brauchen.
+            # Eine kaputte Datei faellt hier auf, nicht erst beim Agenten.
+            docker exec audit-worker python -c "import clients; print('Mandanten:', [c.id for c in clients.alle_mandanten()])"
+
             cd /opt/audit-worker
             export \$(grep -E '^AUDIT_SHARED_SECRET=' .env)
-            CODE=\$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8003/audit \
+
+            # Falsches Geheimnis MUSS 401 geben. Antwortet der Worker hier mit
+            # 200, steht er offen.
+            FALSCH=\$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8003/audit \
+              -H 'Content-Type: application/json' -H 'X-Shared-Secret: garantiert-falsch' \
+              -d '{"url":"cbgg.de"}')
+            echo "Falsches Geheimnis: \$FALSCH"
+            [ "\$FALSCH" = "401" ] || { echo "FEHLER: Auth greift nicht"; exit 1; }
+
+            ANTWORT=\$(curl -s -X POST http://127.0.0.1:8003/audit \
               -H 'Content-Type: application/json' -H "X-Shared-Secret: \$AUDIT_SHARED_SECRET" \
               -d '{"url":"cbgg.de"}')
-            echo "Enqueue-Antwort: \$CODE"
-            case "\$CODE" in 200|202) ;; *) echo "FEHLER: Worker antwortet nicht"; exit 1 ;; esac
+            echo "Enqueue-Antwort: \$ANTWORT"
+            echo "\$ANTWORT" | grep -q '"job_id"' || { echo "FEHLER: kein job_id"; exit 1; }
+            JOB=\$(echo "\$ANTWORT" | sed -n 's/.*"job_id":"\([a-f0-9]*\)".*/\1/p')
+            [ -n "\$JOB" ] || { echo "FEHLER: job_id nicht lesbar"; exit 1; }
+
+            # Long-Poll und kompaktes Format in einem Zug - genau der Weg, den
+            # der Akquise-Agent nehmen wird. Mit dem Trichter-Geheimnis geprueft,
+            # damit die CI kein eigenes braucht.
+            KOMPAKT=\$(curl -s -H "X-Shared-Secret: \$AUDIT_SHARED_SECRET" \
+              "http://127.0.0.1:8003/audit/\$JOB?format=kompakt&warten=60")
+            echo "Kompakt: \$(echo \$KOMPAKT | cut -c1-300)"
+            echo "\$KOMPAKT" | grep -q 'message_internal' && { echo "FEHLER: interne Fassung durchgelassen"; exit 1; }
+            if echo "\$KOMPAKT" | grep -q '"status":"done"'; then
+              for FELD in overall kategorien schwaechste_kategorie top_findings geprueft_am; do
+                echo "\$KOMPAKT" | grep -q "\"\$FELD\"" || { echo "FEHLER: Feld \$FELD fehlt"; exit 1; }
+              done
+              echo "Kompaktes Format vollstaendig, ohne Interna."
+            else
+              echo "Hinweis: Auftrag nicht done - Formatpruefung uebersprungen."
+            fi
             echo "Deploy verifiziert."
           EOSSH
 

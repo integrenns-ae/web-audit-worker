@@ -12,10 +12,10 @@ beschreibt den Zielzustand; die Spalte **Stufe** sagt, was schon steht.
 | `POST /audit`, `GET /audit/{job_id}` | — | live |
 | Testnetz für den Trichter-Vertrag | 0 | **fertig** |
 | Mandanten (`clients.json`), Eigentumsprüfung | 1 | **fertig** |
-| Mandant in der CI bewiesen | 2 | offen |
-| `?format=kompakt`, `?warten=`, Warteschlangen-Grenze | 3 | offen |
+| Mandantenpfad bei jedem Deploy geprüft | 2 | **fertig** |
+| `?format=kompakt`, `?warten=`, Warteschlangen-Grenze, reservierter Slot | 3 | **fertig** |
 | `keep_raw`, `absender_kandidat` | 4 | offen |
-| Schlüssel für Vilikon | 5 | offen |
+| Schlüssel für Vilikon | 5 | wartet auf den Credstore-Eintrag |
 
 ---
 
@@ -184,7 +184,9 @@ nicht geschätzt. Als Text in einem Modellaufruf ist das Verschwendung.
   Regelwerk — im Score-Ergebnis steht kein Zeitstempel. Bei 12 Stunden
   Cooldown ließe sich frisch sonst nicht von wiederverwendet unterscheiden.
 
-Zielgröße rund **700 Byte**.
+Gemessen an einer durchgefallenen Seite: **7175 Byte** voll, **842 Byte**
+kompakt — Faktor 8,5. `befunde_gesamt` nennt die Zahl aller Befunde, auch wenn
+`top_findings` nur die drei stärksten zeigt.
 
 ### `absender_kandidat` (nur bei `kontaktdaten: true`, ab Stufe 4)
 
@@ -234,8 +236,9 @@ reichen für 3 Kandidaten bei Weitem.
 2. **`rsync --delete` im Deploy würde die Datei löschen** — deshalb steht
    `--exclude='clients.json'` im Workflow. Fehlt der Ausschluss, bekommt der
    Agent nach dem nächsten Push still `401`.
-3. **`?warten=` braucht nginx.** `proxy_read_timeout` mindestens 75 s, sonst
-   bricht der Proxy die Verbindung vor dem Worker ab.
+3. **`?warten=` braucht nginx.** `proxy_read_timeout` steht auf `90s` in
+   `/etc/nginx/sites-available/omr-worker`. Vorher waren es 45 s — damit hätte
+   der Proxy bei `warten=60` vor dem Worker abgebrochen.
 4. **Das Regelwerk liegt doppelt.** Quelle ist `web-audit-ruleset`, produktiv
    ist die Kopie unter `ruleset/`. Nach Regeländerungen ist `--build`
    Pflicht, sonst läuft die alte Version weiter.
