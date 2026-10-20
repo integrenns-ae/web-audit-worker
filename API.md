@@ -7,6 +7,10 @@ Der Worker hat zwei Nutzer: den **Website-Trichter** auf integrenns.de
 Dieses Dokument ist der Vertrag, gegen den die Vilikon-Seite baut. Es
 beschreibt den Zielzustand; die Spalte **Stufe** sagt, was schon steht.
 
+Was der Agent auf der anderen Seite tun soll — Kandidatenauswahl,
+Freigabeliste, Brief- und E-Mail-Kanal, Datenquellen — steht in
+[`AKQUISE-AGENT.md`](AKQUISE-AGENT.md).
+
 | Baustein | Stufe | Stand |
 |---|---|---|
 | `POST /audit`, `GET /audit/{job_id}` | — | live |
