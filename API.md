@@ -11,7 +11,7 @@ beschreibt den Zielzustand; die Spalte **Stufe** sagt, was schon steht.
 |---|---|---|
 | `POST /audit`, `GET /audit/{job_id}` | — | live |
 | Testnetz für den Trichter-Vertrag | 0 | **fertig** |
-| Mandanten (`clients.json`), Eigentumsprüfung | 1 | offen |
+| Mandanten (`clients.json`), Eigentumsprüfung | 1 | **fertig** |
 | Mandant in der CI bewiesen | 2 | offen |
 | `?format=kompakt`, `?warten=`, Warteschlangen-Grenze | 3 | offen |
 | `keep_raw`, `absender_kandidat` | 4 | offen |

@@ -38,12 +38,10 @@ def test_status_ohne_token_ist_401(client):
 
 def test_ohne_konfiguriertes_secret_ist_503(client, monkeypatch):
     """Fail-closed: Ein Worker ohne gesetztes Secret darf nicht offen sein."""
-    import app as app_mod
-
     for leer in ("", "changeme", "CHANGE_ME"):
-        monkeypatch.setattr(app_mod, "SHARED_SECRET", leer)
+        monkeypatch.setenv("AUDIT_SHARED_SECRET", leer)
         r = client.post("/audit", json={"url": "example.de"}, headers=AUTH)
-        assert r.status_code == 503, f"SHARED_SECRET={leer!r} war nicht fail-closed"
+        assert r.status_code == 503, f"AUDIT_SHARED_SECRET={leer!r} war nicht fail-closed"
 
 
 # --- Eingabepruefung --------------------------------------------------------
@@ -253,3 +251,192 @@ def test_start_raeumt_haengende_jobs_auf(db, monkeypatch):
     with TestClient(app_mod.app) as c:
         body = c.get("/audit/verwaist", headers=AUTH).json()
     assert body["status"] == "failed"
+
+
+# ===========================================================================
+# Mandanten (Stufe 1)
+# ===========================================================================
+
+from conftest import AGENT_AUTH, AGENT_EINTRAG  # noqa: E402
+
+
+def test_mandant_bekommt_eigene_limits(client, mandanten_datei):
+    """Der Agent darf 20 pro Stunde, der Trichter 5. Beide zaehlen getrennt."""
+    mandanten_datei([AGENT_EINTRAG])
+    for i in range(20):
+        r = client.post("/audit", json={"url": f"agent{i}.de"}, headers=AGENT_AUTH)
+        assert r.status_code == 202, f"Agent-Aufruf {i + 1} abgewiesen"
+    assert client.post("/audit", json={"url": "zuviel.de"},
+                       headers=AGENT_AUTH).status_code == 429
+
+    # Der Trichter ist davon voellig unberuehrt.
+    assert client.post("/audit", json={"url": "besucher.de"},
+                       headers=AUTH).status_code == 202
+
+
+def test_mandant_kann_sein_limit_nicht_per_header_zuruecksetzen(client, mandanten_datei):
+    """Die eigentliche Haertung: Vorher setzte jeder Geheimnis-Inhaber per
+    X-Client-IP eine frei erfundene IP - und damit sein Limit beliebig oft
+    zurueck. Das Limit zaehlt jetzt gegen den Mandanten."""
+    mandanten_datei([AGENT_EINTRAG])
+    for i in range(20):
+        r = client.post("/audit", json={"url": f"a{i}.de"},
+                        headers={**AGENT_AUTH, "X-Client-IP": f"10.1.1.{i}"})
+        assert r.status_code == 202
+    r = client.post("/audit", json={"url": "nochmal.de"},
+                    headers={**AGENT_AUTH, "X-Client-IP": "10.9.9.9"})
+    assert r.status_code == 429, "Mandant hat sein Limit per Header umgangen"
+
+
+def test_mandant_wird_nicht_unter_seiner_ip_gespeichert(client, db, mandanten_datei):
+    """Datensparsamkeit: Fuer den Agenten wird gar keine IP gespeichert -
+    sie waere immer die des Vilikon-VPS und damit nutzlos."""
+    mandanten_datei([AGENT_EINTRAG])
+    client.post("/audit", json={"url": "example.de"},
+                headers={**AGENT_AUTH, "X-Client-IP": "203.0.113.7"})
+    zeilen = [r["ip"] for r in db._c().execute("SELECT ip FROM req_log")]
+    assert zeilen == ["client:vilikon"]
+    assert "203.0.113.7" not in zeilen
+
+
+def test_trichter_darf_die_besucher_ip_weiter_melden(client, db, mandanten_datei):
+    """Gegenstueck zur Haertung: Der Strato-Proxy MUSS das koennen, sonst
+    sperrt ein einziger Besucher den Check fuer alle."""
+    mandanten_datei([AGENT_EINTRAG])
+    client.post("/audit", json={"url": "example.de"},
+                headers={**AUTH, "X-Client-IP": "203.0.113.7"})
+    assert db.count_requests("203.0.113.7", 3600) == 1
+
+
+def test_auftrag_wird_dem_mandanten_zugeordnet(client, db, mandanten_datei):
+    mandanten_datei([AGENT_EINTRAG])
+    job_id = client.post("/audit", json={"url": "example.de"},
+                         headers=AGENT_AUTH).json()["job_id"]
+    assert db.get_job(job_id)["client_id"] == "vilikon"
+
+
+# --- Eigentumspruefung ------------------------------------------------------
+
+def test_mandant_sieht_fremde_auftraege_nicht(client, mandanten_datei):
+    """Vorher konnte jeder Geheimnis-Inhaber jeden Job lesen."""
+    mandanten_datei([AGENT_EINTRAG])
+    fremd = client.post("/audit", json={"url": "besucher.de"},
+                        headers=AUTH).json()["job_id"]
+    r = client.get(f"/audit/{fremd}", headers=AGENT_AUTH)
+    assert r.status_code == 404
+
+
+def test_trichter_sieht_auftraege_des_mandanten_nicht(client, mandanten_datei):
+    mandanten_datei([AGENT_EINTRAG])
+    fremd = client.post("/audit", json={"url": "agent.de"},
+                        headers=AGENT_AUTH).json()["job_id"]
+    assert client.get(f"/audit/{fremd}", headers=AUTH).status_code == 404
+
+
+def test_fremder_auftrag_gibt_404_und_nicht_403(client, mandanten_datei):
+    """404 ist hier kein Schlamperei-Fehlercode, sondern Absicht: Ein 403
+    wuerde bestaetigen, dass es diese job_id gibt."""
+    mandanten_datei([AGENT_EINTRAG])
+    fremd = client.post("/audit", json={"url": "besucher.de"},
+                        headers=AUTH).json()["job_id"]
+    echt = client.get(f"/audit/{fremd}", headers=AGENT_AUTH)
+    erfunden = client.get("/audit/" + "0" * 32, headers=AGENT_AUTH)
+    assert echt.status_code == erfunden.status_code == 404
+    assert echt.json() == erfunden.json()
+
+
+def test_eigener_auftrag_bleibt_lesbar(client, db, mandanten_datei):
+    mandanten_datei([AGENT_EINTRAG])
+    job_id = client.post("/audit", json={"url": "agent.de"},
+                         headers=AGENT_AUTH).json()["job_id"]
+    db.finish_job(job_id, "done", result={"overall": 55})
+    body = client.get(f"/audit/{job_id}", headers=AGENT_AUTH).json()
+    assert body["result"]["overall"] == 55
+
+
+def test_altauftrag_ohne_mandant_gehoert_dem_trichter(client, db):
+    """Beim Deploy der Mandantenfaehigkeit laufende Auftraege duerfen nicht
+    unlesbar werden. Die Migration fuellt client_id nach - dieser Test deckt
+    den Fall ab, dass eine Zeile trotzdem NULL hat."""
+    db.create_job("alt", "https://example.de/", "example.de")
+    db._c().execute("UPDATE jobs SET client_id=NULL WHERE id='alt'")
+    db._c().commit()
+    db.finish_job("alt", "done", result={"overall": 42})
+    body = client.get("/audit/alt", headers=AUTH).json()
+    assert body["result"]["overall"] == 42
+
+
+# --- Geteilter Domain-Cooldown ---------------------------------------------
+
+def test_mandant_erbt_frisches_ergebnis_des_trichters(client, db, mandanten_datei):
+    """Hoeflichkeit gegenueber der fremden Seite: Hat der Trichter sie gerade
+    geprueft, wird nicht ein zweites Mal gecrawlt."""
+    mandanten_datei([AGENT_EINTRAG])
+    db.create_job("vomtrichter", "https://example.de/", "example.de",
+                  client_id="trichter")
+    db.finish_job("vomtrichter", "done", result={"overall": 61})
+
+    r = client.post("/audit", json={"url": "example.de"}, headers=AGENT_AUTH)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cached"] is True
+    # Eigene job_id, nicht die fremde - sonst griffe die Eigentumspruefung.
+    assert body["job_id"] != "vomtrichter"
+
+    gelesen = client.get(f"/audit/{body['job_id']}", headers=AGENT_AUTH)
+    assert gelesen.status_code == 200
+    assert gelesen.json()["result"]["overall"] == 61
+
+
+def test_geerbtes_ergebnis_behaelt_seinen_zeitstempel(client, db, mandanten_datei):
+    """Sonst waere ein wiederverwendetes Ergebnis als frisch gemeldet - und
+    geprueft_am im kompakten Format eine Luege."""
+    mandanten_datei([AGENT_EINTRAG])
+    db.create_job("vomtrichter", "https://example.de/", "example.de",
+                  client_id="trichter")
+    db.finish_job("vomtrichter", "done", result={"overall": 61})
+    original = db.get_job("vomtrichter")["finished_at"]
+
+    neue = client.post("/audit", json={"url": "example.de"},
+                       headers=AGENT_AUTH).json()["job_id"]
+    assert db.get_job(neue)["finished_at"] == original
+
+
+def test_eigenes_frisches_ergebnis_wird_nicht_kopiert(client, db, mandanten_datei):
+    """Beim eigenen Treffer bleibt die alte job_id - sonst wuechse die
+    Tabelle bei jedem Cache-Treffer um eine Zeile."""
+    mandanten_datei([AGENT_EINTRAG])
+    db.create_job("eigen", "https://example.de/", "example.de", client_id="vilikon")
+    db.finish_job("eigen", "done", result={"overall": 61})
+
+    for _ in range(3):
+        body = client.post("/audit", json={"url": "example.de"},
+                           headers=AGENT_AUTH).json()
+        assert body["job_id"] == "eigen"
+    assert db._c().execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 1
+
+
+def test_laengerer_cooldown_des_mandanten_wird_benutzt(client, db, mandanten_datei):
+    """Der Agent hat 12 Stunden Cooldown, der Trichter 10 Minuten. Ein zwei
+    Stunden altes Ergebnis ist fuer den Agenten frisch, fuer den Besucher nicht."""
+    mandanten_datei([AGENT_EINTRAG])
+    db.create_job("alt", "https://example.de/", "example.de", client_id="trichter")
+    db.finish_job("alt", "done", result={"overall": 61})
+    db._c().execute("UPDATE jobs SET finished_at=? WHERE id='alt'", (time.time() - 7200,))
+    db._c().commit()
+
+    assert client.post("/audit", json={"url": "example.de"},
+                       headers=AGENT_AUTH).json().get("cached") is True
+    assert client.post("/audit", json={"url": "example.de"},
+                       headers=AUTH).status_code == 202
+
+
+def test_geerbtes_ergebnis_verbraucht_kein_limit(client, db, mandanten_datei):
+    mandanten_datei([AGENT_EINTRAG])
+    db.create_job("vomtrichter", "https://example.de/", "example.de",
+                  client_id="trichter")
+    db.finish_job("vomtrichter", "done", result={"overall": 61})
+    for _ in range(5):
+        assert client.post("/audit", json={"url": "example.de"},
+                           headers=AGENT_AUTH).status_code == 200
+    assert db.count_requests("client:vilikon", 3600) == 0

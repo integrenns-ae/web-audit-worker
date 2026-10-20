@@ -171,3 +171,128 @@ def test_loeschung_vertraegt_leere_datenbank(db):
     db.cleanup_jobs(older_than_s=1)
     db.cleanup_req_log(older_than_s=1)
     db.mark_stale_pending_failed(older_than_s=0)
+
+
+# ===========================================================================
+# Migration auf die Mandantenfaehigkeit (Stufe 1)
+# ===========================================================================
+
+# Das Schema GENAU so, wie es vor der Mandantenfaehigkeit auf dem VPS lag.
+ALTES_SCHEMA = """
+CREATE TABLE jobs (
+    id          TEXT PRIMARY KEY,
+    url         TEXT NOT NULL,
+    domain      TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    result      TEXT,
+    grund       TEXT,
+    created_at  REAL NOT NULL,
+    finished_at REAL
+);
+CREATE INDEX idx_jobs_domain ON jobs(domain, finished_at);
+CREATE TABLE req_log (
+    ip   TEXT NOT NULL,
+    ts   REAL NOT NULL
+);
+CREATE INDEX idx_req_ip ON req_log(ip, ts);
+"""
+
+
+def _alte_datenbank_anlegen(pfad: str) -> None:
+    """Datenbank im Vor-Mandanten-Schema mit echten Zeilen."""
+    conn = sqlite3.connect(pfad)
+    conn.executescript(ALTES_SCHEMA)
+    jetzt = time.time()
+    conn.execute(
+        "INSERT INTO jobs (id, url, domain, status, result, created_at, finished_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        ("fertig1", "https://alt.de/", "alt.de", "done",
+         '{"overall": 88}', jetzt - 60, jetzt - 30),
+    )
+    conn.execute(
+        "INSERT INTO jobs (id, url, domain, status, created_at) VALUES (?,?,?,?,?)",
+        ("laeuft1", "https://neu.de/", "neu.de", "pending", jetzt),
+    )
+    conn.execute("INSERT INTO req_log (ip, ts) VALUES (?,?)", ("9.9.9.9", jetzt))
+    conn.commit()
+    conn.close()
+
+
+def test_migration_erhaelt_bestehende_auftraege(db):
+    """Beim Deploy darf nichts verloren gehen - auch nicht ein Auftrag, den
+    ein Besucher in diesem Moment pollt."""
+    _alte_datenbank_anlegen(db.DB_PATH)
+
+    job = db.get_job("fertig1")
+    assert job is not None
+    assert job["status"] == "done"
+    assert job["result"]["overall"] == 88
+    assert job["url"] == "https://alt.de/"
+    assert db.get_job("laeuft1")["status"] == "pending"
+    assert db.count_requests("9.9.9.9", 3600) == 1
+
+
+def test_migration_schreibt_alte_zeilen_dem_trichter_zu(db):
+    """Ohne diese Nachfuellung wuerde die Eigentumspruefung laufende
+    Auftraege nach dem Deploy mit 404 abweisen."""
+    from clients import LEGACY_CLIENT_ID
+
+    _alte_datenbank_anlegen(db.DB_PATH)
+    assert db.get_job("fertig1")["client_id"] == LEGACY_CLIENT_ID
+    assert db.get_job("laeuft1")["client_id"] == LEGACY_CLIENT_ID
+
+
+def test_migration_laeuft_zweimal_ohne_schaden(db):
+    """Jeder Containerstart oeffnet die Datenbank erneut."""
+    _alte_datenbank_anlegen(db.DB_PATH)
+    assert db.get_job("fertig1")["client_id"] is not None
+
+    db._conn.close()
+    db._conn = None
+    assert db.get_job("fertig1")["result"]["overall"] == 88
+    db.create_job("danach", "https://x.de/", "x.de", client_id="vilikon")
+    assert db.get_job("danach")["client_id"] == "vilikon"
+
+
+def test_cooldown_findet_auch_fremde_ergebnisse(db):
+    """Der Cooldown ist absichtlich mandantenuebergreifend: Eine fremde Seite
+    soll nicht zweimal gecrawlt werden."""
+    db.create_job("vomtrichter", "https://example.de/", "example.de", client_id="trichter")
+    db.finish_job("vomtrichter", "done", result={"overall": 50})
+    treffer = db.recent_done_for_domain("example.de", 600)
+    assert treffer["client_id"] == "trichter"
+
+
+def test_klon_uebernimmt_ergebnis_und_zeitstempel(db):
+    db.create_job("quelle", "https://example.de/", "example.de", client_id="trichter")
+    db.finish_job("quelle", "done", result={"overall": 50})
+    quelle = db.get_job("quelle")
+
+    db.clone_job_for_client(quelle, "klon", "vilikon")
+    klon = db.get_job("klon")
+    assert klon["client_id"] == "vilikon"
+    assert klon["status"] == "done"
+    assert klon["result"]["overall"] == 50
+    assert klon["finished_at"] == quelle["finished_at"]
+    assert klon["domain"] == "example.de"
+    # Die Quelle bleibt unberuehrt.
+    assert db.get_job("quelle")["client_id"] == "trichter"
+
+
+def test_kuerzere_aufbewahrung_trifft_nur_den_mandanten(db):
+    """retention_days: Der Agent prueft fremde Firmenseiten. Was nicht
+    angeschrieben wird, soll nach Tagen verschwinden, nicht nach Monaten -
+    waehrend der Trichter seine zwoelf Monate behaelt."""
+    alt = time.time() - 40 * 86400
+    for jid, cid in (("agent_alt", "vilikon"), ("trichter_alt", "trichter")):
+        db.create_job(jid, f"https://{jid}.de/", f"{jid}.de", client_id=cid)
+        db.finish_job(jid, "done", result={"overall": 1})
+        db._c().execute("UPDATE jobs SET finished_at=? WHERE id=?", (alt, jid))
+    db.create_job("agent_neu", "https://neu.de/", "neu.de", client_id="vilikon")
+    db._c().commit()
+
+    weg = db.cleanup_jobs_for_client("vilikon", 30 * 86400)
+    assert weg == 1
+    assert db.get_job("agent_alt") is None
+    assert db.get_job("agent_neu") is not None
+    assert db.get_job("trichter_alt") is not None

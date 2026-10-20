@@ -51,12 +51,35 @@ produktiv ist allein die Kopie unter `ruleset/`. Das Dockerfile kopiert sie beim
 Bauen nach `/opt/ruleset` — nach Regeländerungen ist `docker compose up -d
 --build` deshalb Pflicht, ein `restart` ließe die alte Version laufen.
 
+## Mandanten
+
+Das Shared-Secret entscheidet, **wer** ruft (`clients.py`):
+
+- **Trichter** — Zugang aus `AUDIT_SHARED_SECRET`, Limit pro Besucher-IP
+  (5/Stunde, 15/Tag), Cooldown 10 min, darf die echte Besucher-IP per
+  `X-Client-IP` melden.
+- **Weitere Mandanten** — optional in `clients.json` (nicht im Repo), Limit
+  pro Mandant, eigene Limits und Cooldowns.
+
+Der Trichter wird **zuerst** geprüft, unabhängig davon, ob `clients.json`
+existiert oder gültig ist. Eine kaputte Datei führt zu einem Fehlereintrag im
+Log und einer leeren Mandantenliste — **nie** zu einem 401 für einen echten
+Besucher. In der Datei stehen ausschließlich SHA-256-Hashes; sie zu lesen
+genügt nicht, um sich anzumelden.
+
+Ein Mandant sieht nur **eigene** Aufträge. Fremde Job-IDs geben `404`, nicht
+`403` — sonst wäre die Antwort ein Orakel über existierende IDs.
+
+Der Domain-Cooldown gilt **mandantenübergreifend**: Hat der Trichter eine
+Domain gerade geprüft, erbt ein Mandant das Ergebnis als eigenen Auftrag statt
+die fremde Seite ein zweites Mal zu crawlen.
+
 ## Schutz / Limits
 
-- Rate-Limit pro IP: 5/Stunde, 15/Tag.
-- Domain-Cooldown 10 min mit Ergebnis-Cache (spart Kosten, kein Limit-Verbrauch).
+- Rate-Limit je Absender (IP oder Mandant): Stunde + Tag, siehe oben.
+- Domain-Cooldown mit Ergebnis-Cache (spart Kosten, kein Limit-Verbrauch).
 - Global max. 3 gleichzeitige Audits (Semaphore, Rest wartet).
-- SQLite-Job-Store (persistent, überlebt Neustarts).
+- SQLite-Job-Store (persistent, überlebt Neustarts, Schema wird migriert).
 
 ## Tests
 

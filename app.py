@@ -1,17 +1,21 @@
 """audit-worker — FastAPI-Gegenpart zum /website-check-Trichter.
 
-Vertrag (2026-07-28):
+Vertrag:
   POST /audit            {url}            -> 202 {job_id, status:"pending"}
   GET  /audit/{job_id}                    -> 200 {status, result?|grund?}
   GET  /health                            -> {status:"ok"}
 
-Aufruf server-seitig vom Strato-PHP-Proxy mit Header X-Shared-Secret.
+Aufruf mit Header X-Shared-Secret. Das Geheimnis entscheidet, WELCHER Mandant
+ruft (siehe clients.py): der Website-Trichter über den Strato-PHP-Proxy oder
+der Akquise-Agent auf dem Vilikon-VPS. Limits, Cooldown und Datenhaltung
+haengen am Mandanten.
+
+Der vollstaendige Vertrag fuer Aufrufer von aussen steht in API.md.
 Scoring steckt in audit.run_audit() (Integrationsnaht für das echte Regelwerk).
 """
 from __future__ import annotations
 
 import asyncio
-import hmac
 import logging
 import os
 import secrets
@@ -24,16 +28,14 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+import clients
 import store
 from audit import NotAuditableError, _host, run_audit
+from clients import Client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("audit-worker")
 
-SHARED_SECRET = os.environ.get("AUDIT_SHARED_SECRET", "")
-RATE_HOUR = int(os.environ.get("AUDIT_RATE_HOUR", "5"))
-RATE_DAY = int(os.environ.get("AUDIT_RATE_DAY", "15"))
-DOMAIN_COOLDOWN = int(os.environ.get("AUDIT_DOMAIN_COOLDOWN", "600"))   # 10 min
 MAX_CONCURRENT = int(os.environ.get("AUDIT_MAX_CONCURRENT", "3"))
 MAX_URL = 300
 
@@ -65,6 +67,19 @@ IP_MAX_AGE_S = 86400
 JOBS_MAX_AGE_S = 365 * 86400
 
 
+def _aufraeumen() -> None:
+    """Alle Loeschfristen in einem Durchgang."""
+    store.cleanup_req_log(IP_MAX_AGE_S)
+    store.cleanup_jobs(JOBS_MAX_AGE_S)
+    # Mandanten mit kuerzerer Aufbewahrung (retention_days) zuerst - der Agent
+    # prueft fremde Firmenseiten, die nicht monatelang liegen bleiben sollen.
+    for client in clients.alle_mandanten():
+        if client.retention_days:
+            weg = store.cleanup_jobs_for_client(client.id, client.retention_days * 86400)
+            if weg:
+                log.info("Mandant %s: %d alte Auftraege geloescht", client.id, weg)
+
+
 async def _prune_loop() -> None:
     while True:
         try:
@@ -75,8 +90,7 @@ async def _prune_loop() -> None:
         # nur beim Start - bei wochenlang laufendem Container wurden IP-Adressen
         # damit faktisch nie geloescht.
         try:
-            await asyncio.to_thread(store.cleanup_req_log, IP_MAX_AGE_S)
-            await asyncio.to_thread(store.cleanup_jobs, JOBS_MAX_AGE_S)
+            await asyncio.to_thread(_aufraeumen)
         except Exception:  # noqa: BLE001
             log.exception("datenbank-cleanup fehlgeschlagen")
         await asyncio.sleep(86400)   # täglich
@@ -89,8 +103,7 @@ async def lifespan(_: FastAPI):
     # Grenzwert von 900s blieben jung gestorbene Jobs fuer immer pending,
     # und der Trichter pollte sie endlos.
     store.mark_stale_pending_failed(older_than_s=0)
-    store.cleanup_req_log(older_than_s=IP_MAX_AGE_S)
-    store.cleanup_jobs(older_than_s=JOBS_MAX_AGE_S)
+    _aufraeumen()
     prune_task = asyncio.create_task(_prune_loop())
     yield
     prune_task.cancel()
@@ -103,19 +116,39 @@ class AuditReq(BaseModel):
     url: str = Field(..., min_length=3, max_length=MAX_URL)
 
 
-def _check_secret(provided: str | None) -> None:
-    if not SHARED_SECRET or SHARED_SECRET in ("", "changeme", "CHANGE_ME"):
+def _resolve_client(provided: str | None) -> Client:
+    """Geheimnis -> Mandant. 401 bei falschem, 503 bei unkonfiguriertem Worker."""
+    client = clients.resolve(provided)
+    if client is not None:
+        return client
+    # Fail-closed: Ohne brauchbares Shared-Secret ist der Worker nicht
+    # konfiguriert - das ist ein Betriebsfehler, kein Tippfehler des Aufrufers.
+    if not clients.legacy_configured():
         raise HTTPException(status_code=503, detail="Service nicht konfiguriert.")
-    if not provided or not hmac.compare_digest(provided, SHARED_SECRET):
-        raise HTTPException(status_code=401, detail="Ungueltiges oder fehlendes Token.")
+    raise HTTPException(status_code=401, detail="Ungueltiges oder fehlendes Token.")
 
 
-def _client_ip(request: Request) -> str:
-    # Echte Besucher-IP kommt vom Strato-Proxy als X-Client-IP (server-seitig
-    # gesetzt, nur mit gültigem Shared-Secret erreichbar -> vertrauenswürdig).
-    return (request.headers.get("x-client-ip")
-            or request.headers.get("x-real-ip")
-            or (request.client.host if request.client else "?"))
+def _subject(request: Request, client: Client) -> str:
+    """Wogegen das Rate-Limit zaehlt.
+
+    Fuer den Trichter die echte Besucher-IP, die der Strato-Proxy als
+    X-Client-IP meldet - sonst wuerde ein einziger Besucher den Check fuer
+    alle sperren.
+
+    Fuer Maschinen-Mandanten der Mandantenname. Die IP waere immer die des
+    Vilikon-VPS und damit nutzlos; sie wird deshalb gar nicht gespeichert.
+
+    Entscheidend ist, dass der Header NUR fuer trust_client_ip ausgewertet
+    wird. Vorher konnte jeder Geheimnis-Inhaber durch eine frei erfundene
+    X-Client-IP sein eigenes Limit beliebig oft zuruecksetzen.
+    """
+    if client.limit_scope == "client":
+        return f"client:{client.id}"
+    if client.trust_client_ip:
+        gemeldet = request.headers.get("x-client-ip") or request.headers.get("x-real-ip")
+        if gemeldet:
+            return gemeldet[:64]
+    return request.client.host if request.client else "?"
 
 
 async def _run_job(job_id: str, url: str) -> None:
@@ -127,7 +160,7 @@ async def _run_job(job_id: str, url: str) -> None:
         except NotAuditableError as e:
             await asyncio.to_thread(store.finish_job, job_id, "nicht_auditierbar", grund=str(e))
             log.info("job %s nicht_auditierbar", job_id)
-        except Exception as e:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             log.exception("job %s failed", job_id)
             await asyncio.to_thread(store.finish_job, job_id, "failed", grund="interner Fehler")
 
@@ -139,37 +172,51 @@ def health():
 
 @app.post("/audit")
 async def enqueue(req: AuditReq, request: Request, x_shared_secret: str | None = Header(default=None)):
-    _check_secret(x_shared_secret)
-    ip = _client_ip(request)
+    client = _resolve_client(x_shared_secret)
+    subject = _subject(request, client)
     domain = _host(req.url)
     if not domain or "." not in domain:
         raise HTTPException(status_code=400, detail="Ungueltige URL.")
 
-    # Domain-Cooldown: frisches Ergebnis wiederverwenden (spart Kosten, kein Limit-Verbrauch).
-    cached = await asyncio.to_thread(store.recent_done_for_domain, domain, DOMAIN_COOLDOWN)
+    # Domain-Cooldown: frisches Ergebnis wiederverwenden (spart Kosten, kein
+    # Limit-Verbrauch). Die Suche laeuft ueber alle Mandanten - eine fremde
+    # Seite soll nicht zweimal gecrawlt werden, nur weil zwei Mandanten sie
+    # kurz hintereinander anfragen.
+    cached = await asyncio.to_thread(store.recent_done_for_domain, domain, client.cooldown_s)
     if cached:
-        return JSONResponse(status_code=200, content={"job_id": cached["id"], "status": "done", "cached": True})
+        if (cached.get("client_id") or clients.LEGACY_CLIENT_ID) == client.id:
+            return JSONResponse(status_code=200,
+                content={"job_id": cached["id"], "status": "done", "cached": True})
+        # Ergebnis eines anderen Mandanten: dem Aufrufer als eigenen Auftrag
+        # gutschreiben. Sonst wuerde die Eigentumspruefung auf GET die gerade
+        # ausgelieferte job_id mit 404 abweisen.
+        eigene_id = secrets.token_hex(16)
+        await asyncio.to_thread(store.clone_job_for_client, cached, eigene_id, client.id)
+        return JSONResponse(status_code=200,
+            content={"job_id": eigene_id, "status": "done", "cached": True})
 
-    # Rate-Limit pro IP (Stunde + Tag).
-    per_hour = await asyncio.to_thread(store.count_requests, ip, 3600)
-    per_day = await asyncio.to_thread(store.count_requests, ip, 86400)
-    if per_hour >= RATE_HOUR or per_day >= RATE_DAY:
+    # Rate-Limit (Stunde + Tag), gezaehlt gegen subject.
+    per_hour = await asyncio.to_thread(store.count_requests, subject, 3600)
+    per_day = await asyncio.to_thread(store.count_requests, subject, 86400)
+    if per_hour >= client.rate_hour or per_day >= client.rate_day:
         raise HTTPException(status_code=429,
             detail="Zu viele Pruefungen. Bitte kontaktieren Sie uns direkt.")
 
-    await asyncio.to_thread(store.log_request, ip)
+    await asyncio.to_thread(store.log_request, subject)
     # Die Job-ID ist der einzige Schutz davor, fremde Ergebnisse zu erraten.
     job_id = secrets.token_hex(16)
-    await asyncio.to_thread(store.create_job, job_id, req.url, domain)
+    await asyncio.to_thread(store.create_job, job_id, req.url, domain, client.id)
     asyncio.create_task(_run_job(job_id, req.url))
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "pending"})
 
 
 @app.get("/audit/{job_id}")
 async def status(job_id: str, x_shared_secret: str | None = Header(default=None)):
-    _check_secret(x_shared_secret)
+    client = _resolve_client(x_shared_secret)
     job = await asyncio.to_thread(store.get_job, job_id)
-    if not job:
+    # Fremde Auftraege sehen aus wie unbekannte: 404, nicht 403. Ein 403 waere
+    # ein Orakel - es wuerde bestaetigen, dass es diese job_id gibt.
+    if not job or (job.get("client_id") or clients.LEGACY_CLIENT_ID) != client.id:
         raise HTTPException(status_code=404, detail="Unbekannter Job.")
     s = job["status"]
     if s == "done":

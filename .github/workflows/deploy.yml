@@ -76,7 +76,7 @@ jobs:
           rsync -az --delete \
             --exclude='.env' --exclude='.git' --exclude='.github' \
             --exclude='.venv' --exclude='__pycache__' --exclude='.pytest_cache' \
-            --exclude='ruleset/runs' \
+            --exclude='ruleset/runs' --exclude='clients.json' \
             -e "ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes" \
             ./ "$VPS_USER@$VPS_HOST:/opt/audit-worker/"
 

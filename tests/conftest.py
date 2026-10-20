@@ -1,15 +1,16 @@
 """Gemeinsame Vorbereitung fuer die Worker-Tests.
 
-Wichtig: app.py und store.py lesen ihre Konfiguration beim IMPORT aus der
-Umgebung. Die Variablen werden deshalb hier gesetzt - bevor irgendein Test
-die Module importiert - und nicht in den Tests selbst.
+Wichtig: store.py liest DB_PATH beim IMPORT aus der Umgebung, clients.py liest
+das Shared-Secret bei JEDEM Aufruf. Die Variablen werden deshalb hier gesetzt -
+bevor irgendein Test die Module importiert - und nicht in den Tests selbst.
 
-Diese Tests sichern den Vertrag des Website-Trichters ab. Sie sind entstanden,
-bevor der Worker mandantenfaehig wurde: Wenn hier etwas rot wird, ist der Weg
-kaputt, den ein echter Besucher auf integrenns.de nimmt.
+Diese Tests sichern den Vertrag des Website-Trichters ab. Wenn hier etwas rot
+wird, ist der Weg kaputt, den ein echter Besucher auf integrenns.de nimmt.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sys
 import time
@@ -21,6 +22,10 @@ sys.path.insert(0, str(REPO))
 TEST_SECRET = "pytest-shared-secret-0123456789"
 AUTH = {"X-Shared-Secret": TEST_SECRET}
 
+# Geheimnis eines zweiten Mandanten (steht fuer den Akquise-Agenten).
+AGENT_SECRET = "pytest-agent-secret-9876543210"
+AGENT_AUTH = {"X-Shared-Secret": AGENT_SECRET}
+
 os.environ["AUDIT_SHARED_SECRET"] = TEST_SECRET
 os.environ["AUDIT_RATE_HOUR"] = "5"
 os.environ["AUDIT_RATE_DAY"] = "15"
@@ -30,14 +35,30 @@ os.environ["AUDIT_MAX_CONCURRENT"] = "3"
 # Vergisst ein Test die Fixture, soll er scheitern - und nicht die echte
 # Produktionsdatenbank /data/audit.db anfassen.
 os.environ["AUDIT_DB_PATH"] = "/dev/null/niemals-benutzen/audit.db"
+os.environ["AUDIT_CLIENTS_PATH"] = "/dev/null/niemals-benutzen/clients.json"
 
 import pytest  # noqa: E402
 
 FAKE_RESULT = {
     "overall": 73,
-    "categories": {"technik": 80, "inhalt": 66},
+    "category_scores": {"technik_performance": 20, "recht": 0},
     "findings": [],
 }
+
+
+def sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+@pytest.fixture(autouse=True)
+def _mandanten_cache_leeren():
+    """clients.py haelt die geladene clients.json in einem Modul-Cache.
+    Ohne dieses Zuruecksetzen wuerde ein Test den naechsten beeinflussen."""
+    import clients
+
+    clients.reload()
+    yield
+    clients.reload()
 
 
 @pytest.fixture
@@ -50,6 +71,44 @@ def db(tmp_path, monkeypatch):
     yield store
     if store._conn is not None:
         store._conn.close()
+
+
+@pytest.fixture
+def mandanten_datei(tmp_path, monkeypatch):
+    """Schreibt eine clients.json und richtet clients.py darauf aus.
+
+    Nimmt entweder eine Liste von Eintraegen oder rohen Text (fuer kaputte
+    Dateien).
+    """
+    import clients
+
+    pfad = tmp_path / "clients.json"
+    monkeypatch.setattr(clients, "CLIENTS_PATH", pfad)
+
+    def schreiben(inhalt) -> Path:
+        pfad.write_text(
+            inhalt if isinstance(inhalt, str) else json.dumps(inhalt),
+            encoding="utf-8",
+        )
+        clients.reload()
+        return pfad
+
+    return schreiben
+
+
+AGENT_EINTRAG = {
+    "id": "vilikon",
+    "secrets_sha256": [sha256(AGENT_SECRET)],
+    "limit_scope": "client",
+    "rate_hour": 20,
+    "rate_day": 60,
+    "cooldown_s": 43200,
+    "max_queued": 2,
+    "trust_client_ip": False,
+    "keep_raw": False,
+    "kontaktdaten": True,
+    "retention_days": 30,
+}
 
 
 @pytest.fixture
@@ -82,11 +141,11 @@ def client_mit_audit(db, monkeypatch):
         yield c
 
 
-def warte_auf_ende(c, job_id: str, timeout: float = 10.0) -> dict:
+def warte_auf_ende(c, job_id: str, kopf: dict | None = None, timeout: float = 10.0) -> dict:
     """Pollt bis der Job nicht mehr pending ist. Gibt den Antwortkoerper zurueck."""
     ende = time.time() + timeout
     while time.time() < ende:
-        r = c.get(f"/audit/{job_id}", headers=AUTH)
+        r = c.get(f"/audit/{job_id}", headers=kopf or AUTH)
         assert r.status_code == 200, r.text
         body = r.json()
         if body.get("status") != "pending":
