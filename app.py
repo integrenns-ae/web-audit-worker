@@ -3,6 +3,7 @@
 Vertrag:
   POST /audit            {url}            -> 202 {job_id, status:"pending"}
   GET  /audit/{job_id}                    -> 200 {status, result?|grund?}
+  POST /audit/{job_id}   {name, email, …} -> 202 (Anfrage zum Check, nur Trichter)
   GET  /health                            -> {status:"ok"}
 
 Aufruf mit Header X-Shared-Secret. Das Geheimnis entscheidet, WELCHER Mandant
@@ -12,6 +13,7 @@ haengen am Mandanten.
 
 Der vollstaendige Vertrag fuer Aufrufer von aussen steht in API.md.
 Scoring steckt in audit.run_audit() (Integrationsnaht für das echte Regelwerk).
+Checks und Anfragen des Trichters gehen als Lead an Vilikon (vilikon.py).
 """
 from __future__ import annotations
 
@@ -26,11 +28,12 @@ from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 import clients
 import kompakt
 import store
+import vilikon
 from audit import NotAuditableError, _host, run_audit
 from clients import Client
 
@@ -161,7 +164,8 @@ def _subject(request: Request, client: Client) -> str:
 
 
 async def _run_job(job_id: str, url: str, hintergrund: bool = False,
-                   kontaktdaten: bool = False, keep_raw: bool = True) -> None:
+                   kontaktdaten: bool = False, keep_raw: bool = True,
+                   melden: bool = False) -> None:
     async with AsyncExitStack() as slots:
         # Reihenfolge ist wichtig: zuerst der Hintergrund-Slot, dann der
         # globale. Umgekehrt haelt ein Agentenlauf einen globalen Slot fest,
@@ -175,6 +179,11 @@ async def _run_job(job_id: str, url: str, hintergrund: bool = False,
                                      keep_raw=keep_raw)
             await asyncio.to_thread(store.finish_job, job_id, "done", result=result)
             log.info("job %s done overall=%s", job_id, result.get("overall"))
+            if melden:
+                # Kehrt sofort zurueck und wirft nie - die Zustellung laeuft
+                # in einem eigenen Task, der Job ist hier schon fertig.
+                vilikon.melden(vilikon.info_lead, {"id": job_id, "url": url, "result": result,
+                                                   "finished_at": time.time()})
         except NotAuditableError as e:
             await asyncio.to_thread(store.finish_job, job_id, "nicht_auditierbar", grund=str(e))
             log.info("job %s nicht_auditierbar", job_id)
@@ -210,6 +219,10 @@ async def enqueue(req: AuditReq, request: Request, x_shared_secret: str | None =
         # ausgelieferte job_id mit 404 abweisen.
         eigene_id = secrets.token_hex(16)
         await asyncio.to_thread(store.clone_job_for_client, cached, eigene_id, client.id)
+        if _meldet(client):
+            # Ein Besucher hat die Seite geprueft, auch wenn das Ergebnis
+            # geerbt ist - fuer Vilikon ist das ein Check wie jeder andere.
+            vilikon.melden(vilikon.info_lead, {**cached, "id": eigene_id})
         return JSONResponse(status_code=200,
             content={"job_id": eigene_id, "status": "done", "cached": True})
 
@@ -236,8 +249,18 @@ async def enqueue(req: AuditReq, request: Request, x_shared_secret: str | None =
     asyncio.create_task(_run_job(job_id, req.url,
                                  hintergrund=client.hintergrund,
                                  kontaktdaten=client.kontaktdaten,
-                                 keep_raw=client.keep_raw))
+                                 keep_raw=client.keep_raw,
+                                 melden=_meldet(client)))
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "pending"})
+
+
+def _meldet(client: Client) -> bool:
+    """Nur Checks des Trichters gehen an Vilikon.
+
+    Die Auftraege des Akquise-Agenten hat Vilikon selbst erteilt - sie
+    zurueckzumelden waere ein Kreis.
+    """
+    return client.id == clients.LEGACY_CLIENT_ID
 
 
 def _gehoert(job: dict | None, client: Client) -> bool:
@@ -285,3 +308,52 @@ async def status(
     if s in ("nicht_auditierbar", "failed"):
         return {"status": s, "grund": job.get("grund") or ""}
     return {"status": "pending"}
+
+
+class AnfrageReq(BaseModel):
+    """Was der Besucher ins Formular zum Check geschrieben hat - nicht mehr.
+
+    Die Grenzen folgen dem Lead-Format des Cockpits (LEADS-API.md); der
+    Strato-Proxy laesst ohnehin hoechstens 8 kB durch.
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    # "umbau" | "ki-beratung" - wie `typ` in der Web3Forms-Mail.
+    typ: str = Field("umbau", max_length=40, pattern=r"^[a-z0-9-]+$")
+    name: str = Field("", max_length=200)
+    email: str = Field("", max_length=254)
+    telefon: str = Field("", max_length=60)
+    nachricht: str = Field("", max_length=5000)
+    paket_wunsch: str = Field("", max_length=120)
+    sprache: str = Field("", max_length=5)
+
+
+@app.post("/audit/{job_id}", status_code=202)
+async def anfrage(job_id: str, req: AnfrageReq, request: Request,
+                  x_shared_secret: str | None = Header(default=None)):
+    """Anfrage zu einem Check (Formular „Umbau-Anfrage (mit Audit)").
+
+    Antwortet sofort mit 202, ob das Cockpit erreichbar ist oder nicht - die
+    Web3Forms-Mail laeuft daneben weiter, der Besucher merkt von Vilikon nichts.
+    """
+    client = _resolve_client(x_shared_secret)
+    job = await asyncio.to_thread(store.get_job, job_id)
+    # Wie beim Abholen: fremd und unbekannt sehen gleich aus. Anfragen gibt es
+    # nur zu Checks des Trichters.
+    if not _meldet(client) or not _gehoert(job, client):
+        raise HTTPException(status_code=404, detail="Unbekannter Job.")
+    if not req.email.strip() and not req.telefon.strip():
+        raise HTTPException(status_code=422, detail="E-Mail oder Telefon fehlt.")
+
+    # Eigener Zaehler neben dem fuer Pruefungen: Jede Anfrage ist ein Aufruf
+    # beim Cockpit, und dessen Limit teilen sich alle Checks.
+    subject = "anfrage:" + _subject(request, client)
+    per_hour = await asyncio.to_thread(store.count_requests, subject, 3600)
+    per_day = await asyncio.to_thread(store.count_requests, subject, 86400)
+    if per_hour >= client.rate_hour or per_day >= client.rate_day:
+        raise HTTPException(status_code=429,
+            detail="Zu viele Anfragen. Bitte kontaktieren Sie uns direkt.")
+    await asyncio.to_thread(store.log_request, subject)
+
+    vilikon.melden(vilikon.anfrage_lead, job, req.model_dump())
+    return {"status": "angenommen"}

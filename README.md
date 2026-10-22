@@ -20,6 +20,8 @@ dem Browser.
 ```
 POST /audit            {url}          -> 202 {job_id, status:"pending"}
 GET  /audit/{job_id}                  -> 200 {status, result?|grund?}
+POST /audit/{job_id}   {name, email, telefon, nachricht, …}
+                                      -> 202 {status:"angenommen"}  (Anfrage zum Check)
 GET  /health                          -> {status:"ok"}
 ```
 
@@ -95,17 +97,94 @@ Verzeichnisse zu welchem Lauf gehören.
 - Global max. 3 gleichzeitige Audits (Semaphore, Rest wartet).
 - SQLite-Job-Store (persistent, überlebt Neustarts, Schema wird migriert).
 
+## Leads an Vilikon
+
+Jeder Check des Trichters geht als Lead an das Vilikon-Cockpit
+(`POST {VILIKON_URL}/api/leads`, Format „vilikon.lead/1", Vertrag:
+[`ki-cockpit/docs/LEADS-API.md`](https://github.com/integrenns-ae/ki-cockpit/blob/main/docs/LEADS-API.md)).
+Code: `vilikon.py`.
+
+| Was | Lead | Inhalt |
+|---|---|---|
+| Fertiger Check (`done`) | `art: "info"`, `externe_id: "audit-<job_id>"` | `kontakt.website`, `bewertung`, `merkmale` |
+| Anfrage zum Check (`POST /audit/{job_id}`) | `art: "anfrage"`, `externe_id: "audit-<job_id>-anfrage"` | dazu `person`, `kontakt.email`/`telefon`, `anliegen` |
+
+`bewertung` kommt aus dem kompakten Format: `score` = `overall` (Skala 100),
+`hebel` = schwächste Kategorie mit Punkten („Recht 0/20"), `zusammenfassung` =
+alle Kategorien, `befunde` = die drei stärksten, nur `message_customer`. Die
+Kategorienamen sind die, die der Besucher auf integrenns.de gesehen hat. Mit
+Bewertung prüft das Cockpit die Seite nicht noch einmal. `merkmale` trägt
+`heilberuf` (HWG!), `befunde_gesamt`, `geschaeftstyp`, `regelwerk`, bei der
+Anfrage auch `paket_wunsch` und `sprache`. Einen Link zum Bericht gibt es
+nicht, weil es keine Berichtsseite je Auftrag gibt.
+
+**Zwei verschiedene `externe_id`s, mit Absicht:** Das Cockpit verwirft eine
+zweite Lieferung mit derselben id als „bekannt" — auch dann, wenn sie eine
+Anfrage ist. Mit eigener id findet es die Spur über die Domain und stuft sie
+zum To-do hoch.
+
+Gemeldet wird **nur der Trichter**. Aufträge des Akquise-Agenten hat Vilikon
+selbst erteilt. Ein geerbtes Ergebnis (Cooldown, anderer Mandant) zählt als
+eigener Check; ein wiederverwendetes eigenes (dieselbe `job_id`) nicht noch
+einmal. Nie dabei: die Besucher-IP oder sonst etwas über den Besucher — die
+Anfrage trägt nur, was er selbst ins Formular geschrieben hat.
+
+**Best effort.** Die Zustellung läuft in einem eigenen Task: 5 s Timeout je
+Versuch (3 s Verbindungsaufbau), drei Versuche bei Netzfehler, `429` und `5xx`,
+keiner bei `401`/`403`/`422`. Der Check und die Antwort an den Besucher warten
+nie darauf. Fehlschläge stehen im Log mit `externe_id` und Statuscode — ohne
+Schlüssel, ohne Fehlertexte fremder Bibliotheken, bei `422` nur die Feldnamen.
+
+### Die beiden Variablen
+
+| Variable | Inhalt |
+|---|---|
+| `VILIKON_URL` | Adresse des Cockpits **ohne** `/api/leads`, z. B. `https://cockpit.example` |
+| `VILIKON_LEADS_KEY` | Schlüssel `vlk_…` einer API-Quelle im Cockpit |
+
+Beide leer (oder eine davon) = aus; der Worker läuft dann genau wie vorher.
+Den Schlüssel legt Alexander im Cockpit an: **Akquise → Quellen → „Kanal
+anbinden" → Schnittstelle (API)**. Er wird dort nur einmal angezeigt und
+gehört in den Credstore-Eintrag `audit-worker-vilikon` (Felder `VILIKON_URL`,
+`VILIKON_LEADS_KEY`) — von dort in `/opt/audit-worker/.env` auf dem VPS. Nie
+ins Repo, in den Chat oder in ein Log.
+
+`.env` wird beim **Anlegen** des Containers gelesen: Nach einer Änderung
+`docker compose up -d` (legt ihn neu an), ein `restart` reicht **nicht**.
+
+### Anfrage zum Check
+
+`POST /audit/{job_id}` ist für das Formular „Umbau-Anfrage (mit Audit)" (und
+„KI-Beratung") auf `/website-check`. Der Strato-Proxy leitet `POST
+/api/audit/{id}` schon heute weiter (Route `audit/<id>`, Methode `POST`),
+samt Geheimnis und Besucher-IP:
+
+```json
+{"typ": "umbau", "name": "Sabine Sommer", "email": "praxis@example.com",
+ "telefon": "0641 7654321", "nachricht": "…", "paket_wunsch": "schaufenster", "sprache": "de"}
+```
+
+`typ` (`umbau` | `ki-beratung` | …) wird zu Betreff und Kategorie, wie in der
+Web3Forms-Mail. E-Mail **oder** Telefon muss dabei sein (sonst `422`). Antwort
+immer sofort `202 {"status":"angenommen"}` — auch wenn das Cockpit aus oder
+nicht erreichbar ist. `404` für fremde oder unbekannte Aufträge und für jeden
+Mandanten außer dem Trichter; `429` nach 5 Anfragen/Stunde bzw. 15/Tag je
+Besucher-IP (eigener Zähler, getrennt von den Prüfungen). Die Web3Forms-Mail
+bleibt vorerst daneben bestehen; das Cockpit entdoppelt über Domain und E-Mail.
+
 ## Tests
 
 ```sh
 python3 -m pip install -r requirements.txt -r requirements-dev.txt
-python3 -m pytest tests/ -q          # Worker: Trichter-Vertrag (43)
-cd ruleset && python3 -m pytest tests/ -q   # Regelwerk (54)
+python3 -m pytest tests/ -q          # Worker: Trichter-Vertrag, Mandanten, Leads (192)
+cd ruleset && python3 -m pytest tests/ -q   # Regelwerk (59)
 ```
 
 `tests/` sichert den Vertrag ab, auf den sich `/website-check` verlässt: Auth,
 Rate-Limit pro Absender, Domain-Cooldown ohne Limit-Verbrauch, Statusabfrage,
-Crash-Recovery und die Löschfristen, die die Datenschutzerklärung zusagt. Beide
+Crash-Recovery und die Löschfristen, die die Datenschutzerklärung zusagt.
+`tests/test_vilikon.py` prüft die Leads: Ergebnis → Lead-JSON, aus ohne
+Variablen, Fehlschläge ohne Folgen für den Check und ohne Schlüssel im Log. Beide
 Suiten laufen **ohne Netzwerk und ohne Chromium** und sind Teil der CI — ein
 Push mit rotem Test deployt nicht.
 

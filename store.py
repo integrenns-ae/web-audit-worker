@@ -12,7 +12,8 @@ Zwei Dinge sind hier nicht offensichtlich:
 2. **`req_log.ip` ist nicht immer eine IP.** Fuer Mandanten mit
    `limit_scope="client"` steht dort `client:<id>` - die IP waere immer die
    des Vilikon-VPS und damit nutzlos. Es wird also bewusst *keine* IP
-   gespeichert, wo keine gebraucht wird.
+   gespeichert, wo keine gebraucht wird. Anfragen zum Check zaehlen getrennt
+   als `anfrage:<IP>` (gleiche 24-Stunden-Frist).
 """
 from __future__ import annotations
 
@@ -79,7 +80,7 @@ def _c() -> sqlite3.Connection:
             );
             CREATE INDEX IF NOT EXISTS idx_jobs_domain ON jobs(domain, finished_at);
             CREATE TABLE IF NOT EXISTS req_log (
-                ip   TEXT NOT NULL,                 -- IP oder "client:<id>", s. Modulkopf
+                ip   TEXT NOT NULL,                 -- IP, "client:<id>" oder "anfrage:<IP>", s. Modulkopf
                 ts   REAL NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_req_ip ON req_log(ip, ts);

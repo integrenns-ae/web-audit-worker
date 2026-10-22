@@ -36,6 +36,11 @@ os.environ["AUDIT_MAX_CONCURRENT"] = "3"
 # Produktionsdatenbank /data/audit.db anfassen.
 os.environ["AUDIT_DB_PATH"] = "/dev/null/niemals-benutzen/audit.db"
 os.environ["AUDIT_CLIENTS_PATH"] = "/dev/null/niemals-benutzen/clients.json"
+# Lead-Push an Vilikon ist aus, solange ein Test ihn nicht gezielt einschaltet
+# (test_vilikon.py). Sonst wuerde eine Shell mit gesetzten Variablen echte
+# Leads in ein echtes Cockpit schicken.
+os.environ.pop("VILIKON_URL", None)
+os.environ.pop("VILIKON_LEADS_KEY", None)
 # Echtes Regelwerk aus dem Repo - damit der Drift-Test in test_kompakt.py die
 # Gewichtstabelle gegen ruleset.yaml pruefen kann.
 os.environ["RULESET_DIR"] = str(REPO / "ruleset")
