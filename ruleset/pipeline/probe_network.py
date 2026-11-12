@@ -15,6 +15,7 @@ nachher) vergleichen - siehe README.
 
 import json
 import re
+from html import unescape as html_unescape
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -79,12 +80,46 @@ def check_viewport(html: str) -> dict:
     return {"present": True, "content": content, "blocks_zoom": blocks_zoom}
 
 
+# Ein Rechtslink wird an der ADRESSE oder an der BESCHRIFTUNG erkannt.
+# Vorher wurde nur die Adresse geprüft - das erzeugte reihenweise Fehlbefunde
+# "kein Impressum auffindbar" auf Seiten, die sehr wohl eines haben, es aber
+# nicht unter /impressum ablegen:
+#   <a href="#js-c641">Impressum</a>   (Joomla-Modal, Inhalt per iframe)
+#   <a href="/about/">Impressum</a>    (Jimdo-Standardpfad)
+#   <a href="#imprint">Impressum</a>   (Anker auf derselben Seite)
+# Geprüft an zahnarzt-argus.de, tierarzt-hahn.de, gaststaette-lapp.de und
+# recht-giessen.de - alle vier hatten ein vollständiges Impressum.
+_LINK_RE = re.compile(r"<a\b[^>]*\bhref=[\"']([^\"']*)[\"'][^>]*>(.*?)</a>", re.I | re.S)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+_RECHTS_WOERTER = {
+    "impressum": ("impressum", "imprint", "anbieterkennzeichnung", "legal notice", "legal-notice"),
+    "datenschutz": ("datenschutz", "privacy", "privacy-policy"),
+}
+
+# Beschriftungen sind Navigations- oder Fußzeilen-Links, also kurz. Die Grenze
+# verhindert, dass ein ganzer Fließtext-Absatz mit dem Wort "Impressum" darin
+# als Link zum Impressum durchgeht.
+_MAX_BESCHRIFTUNG = 60
+
+
+def _link_beschriftung(roh: str) -> str:
+    return " ".join(html_unescape(_TAG_RE.sub(" ", roh)).split()).lower()
+
+
 def check_legal_pages_linked(html: str) -> dict:
-    lower = html.lower()
-    return {
-        "impressum_linked": bool(re.search(r'href=["\'][^"\']*impressum', lower)),
-        "datenschutz_linked": bool(re.search(r'href=["\'][^"\']*datenschutz', lower)),
-    }
+    treffer = {schluessel: False for schluessel in _RECHTS_WOERTER}
+    for href, roh_text in _LINK_RE.findall(html):
+        adresse = href.lower()
+        text = _link_beschriftung(roh_text)
+        for schluessel, woerter in _RECHTS_WOERTER.items():
+            if treffer[schluessel]:
+                continue
+            if any(w in adresse for w in woerter):
+                treffer[schluessel] = True
+            elif len(text) <= _MAX_BESCHRIFTUNG and any(w in text for w in woerter):
+                treffer[schluessel] = True
+    return {f"{schluessel}_linked": wert for schluessel, wert in treffer.items()}
 
 
 def _real_image_placeholder(lower_html: str) -> bool:

@@ -8,7 +8,26 @@
 # und "version" hochzählen — alte Audit-Ergebnisse bleiben dadurch nachvollziehbar
 # einer bestimmten Regelwerk-Version zugeordnet (siehe run-manifest.ruleset_version).
 
-version: "2026-07-27.16"
+version: "2026-07-27.17"
+# Änderungen ggü. .16:
+#  - recht.impressum_missing / recht.datenschutz_missing lösten reihenweise
+#    FEHLBEFUNDE aus. Ursache in pipeline/probe_network.py::check_legal_pages_linked:
+#    Erkannt wurde ein Rechtslink nur an seiner ADRESSE
+#    (href=..impressum..), nie an seiner BESCHRIFTUNG. Seiten, die ihr
+#    Impressum nicht unter /impressum ablegen, galten damit als impressumslos:
+#      <a href="#js-c641">Impressum</a>  Joomla-Modal, Inhalt per iframe
+#      <a href="/about/">Impressum</a>   Jimdo-Standardpfad
+#      <a href="#imprint">Impressum</a>  Anker auf derselben Seite
+#    Jetzt zählt beides, Adresse ODER Beschriftung. Beschriftungen werden nur
+#    bis 60 Zeichen gewertet, damit ein Fließtext-Absatz mit dem Wort
+#    "Impressum" darin nicht als Link durchgeht.
+#    Nachgewiesen an vier echten Seiten, die alle ein vollständiges Impressum
+#    haben und je -20 Punkte zu Unrecht verloren: zahnarzt-argus.de,
+#    tierarzt-hahn.de, gaststaette-lapp.de, recht-giessen.de.
+#    Richtung der Änderung ist bewusst konservativ: Sie kann nur Abzüge
+#    ZURÜCKNEHMEN, nie neue erzeugen - ein übersehener Mangel ist weniger
+#    schädlich als ein falscher Vorwurf gegenüber einem Interessenten.
+#  - KEINE Änderung an Gewichten.
 # Änderungen ggü. .15:
 #  - inhalt.no_references_or_portfolio gilt nicht mehr für HEILBERUFE (Arzt-,
 #    Zahnarzt-, Therapie-, Heilpraktiker-Praxen). Erkennung:
