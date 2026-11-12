@@ -1,4 +1,8 @@
-playwright>=1.44
+# Festgenagelt auf die Fassung, die produktiv laeuft. Ein Sprung aendert
+# Chromium und damit die Messwerte (FCP!) - das gehoert in eine eigene,
+# bewusste Aenderung mit eigenem Regressionslauf, nicht als Nebenwirkung
+# eines beliebigen Neubaus.
+playwright==1.64.1
 requests>=2.31
 pyyaml>=6.0
 pytest>=8.0

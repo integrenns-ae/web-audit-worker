@@ -1,8 +1,11 @@
 # audit-worker: FastAPI-Plumbing + Regelwerk (Playwright-Crawl) als Subprozess
 FROM python:3.12-slim
 
+# libatomic1: Das von Playwright mitgelieferte node braucht libatomic.so.1.
+# python:3.12-slim bringt sie nicht mit; ohne sie bricht `playwright install`
+# mit exit 127 ab ("error while loading shared libraries").
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl ca-certificates && \
+        curl ca-certificates libatomic1 && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
